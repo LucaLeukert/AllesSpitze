@@ -182,7 +182,6 @@ void SlotReel::spin() {
 
     // Wähle zufällige Position
     const int finalSymbolIndex = QRandomGenerator::global()->bounded(SEQUENCE_LENGTH);
-    qD
 
     qreal targetRotation = currentRot + (spins * currentSymbolHeight * SEQUENCE_LENGTH);
 
