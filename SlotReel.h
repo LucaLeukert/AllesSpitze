@@ -1,5 +1,4 @@
-#ifndef SLOTREEL_H
-#define SLOTREEL_H
+#pragma once
 
 #include <QQuickPaintedItem>
 #include <QPainter>
@@ -10,6 +9,7 @@
 class SlotReel : public QQuickPaintedItem {
     Q_OBJECT
     Q_PROPERTY(qreal rotation READ rotation WRITE setRotation NOTIFY rotationChanged)
+    Q_PROPERTY(qreal missProbability READ missProbability WRITE setMissProbability NOTIFY missProbabilityChanged)
     Q_PROPERTY(bool spinning READ spinning NOTIFY spinningChanged)
 
 public:
@@ -17,16 +17,24 @@ public:
 
     void paint(QPainter *painter) override;
 
-    qreal rotation() const { return m_rotation; }
+    [[nodiscard]] qreal rotation() const { return m_rotation; }
+    [[nodiscard]] bool spinning() const { return m_spinning; }
+    [[nodiscard]] double missProbability() const { return m_missProbability; }
+
     void setRotation(qreal rotation);
-    bool spinning() const { return m_spinning; }
+
+    Q_INVOKABLE void setMissProbability(qreal probability);
 
     Q_INVOKABLE void spin();
+
     Q_INVOKABLE void setProbabilities(const QVariantMap &probabilities);
 
-    signals:
-        void rotationChanged();
+signals:
+    void rotationChanged();
+
     void spinningChanged();
+
+    void missProbabilityChanged();
 
 private slots:
     void onSpinFinished();
@@ -41,10 +49,14 @@ private:
     };
 
     void loadImages();
+
     void paintSymbol(QPainter *painter, Symbol symbol, const QRectF &rect);
+
     Symbol getRandomSymbol();
+
     void buildSymbolSequence();
-    qreal symbolHeight() const { return height(); } // Dynamic symbol height
+
+    [[nodiscard]] qreal symbolHeight() const { return height(); }
 
     qreal m_rotation;
     bool m_spinning;
@@ -54,7 +66,8 @@ private:
     QMap<Symbol, int> m_symbolProbabilities;
     QVector<Symbol> m_symbolSequence;
 
-    static constexpr int SEQUENCE_LENGTH = 10; // Length of pre-built symbol sequence
-};
+    qreal m_missProbability = 0.3; // 30% Chance für eine Niete
+    bool m_landOnMiss = false; // Zeigt an, ob das Reel auf einer Niete landen soll
 
-#endif // SLOTREEL_H
+    static constexpr int SEQUENCE_LENGTH = 10;
+};

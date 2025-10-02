@@ -29,6 +29,8 @@ ApplicationWindow {
                     "sonne": 15,
                     "teufel": 10
                 });
+
+                setMissProbability(0.5);
             }
         }
 

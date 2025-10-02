@@ -5,7 +5,8 @@
 SlotReel::SlotReel(QQuickItem *parent)
     : QQuickPaintedItem(parent)
       , m_rotation(0.0)
-      , m_spinning(false) {
+      , m_spinning(false)
+      , m_missProbability(0.0) {
     setWidth(300);
     setHeight(300);
 
@@ -75,8 +76,7 @@ void SlotReel::setProbabilities(const QVariantMap &probabilities) {
 
     for (int i = 0; i < symbolNames.size(); ++i) {
         if (probabilities.contains(symbolNames[i])) {
-            int prob = probabilities[symbolNames[i]].toInt();
-            if (prob > 0) {
+            if (const int prob = probabilities[symbolNames[i]].toInt(); prob > 0) {
                 m_symbolProbabilities[symbols[i]] = prob;
             }
         }
@@ -110,8 +110,7 @@ void SlotReel::paint(QPainter *painter) {
         const Symbol symbol = m_symbolSequence[symbolIndex];
         const qreal symbolY = (startIndex + i) * currentSymbolHeight - currentOffset;
 
-        QRectF symbolRect(0, symbolY, width(), currentSymbolHeight);
-        if (symbolRect.intersects(boundingRect())) {
+        if (QRectF symbolRect(0, symbolY, width(), currentSymbolHeight); symbolRect.intersects(boundingRect())) {
             paintSymbol(painter, symbol, symbolRect);
         }
     }
@@ -119,38 +118,47 @@ void SlotReel::paint(QPainter *painter) {
 
 void SlotReel::paintSymbol(QPainter *painter, const Symbol symbol, const QRectF &rect) {
     if (m_symbolImages.contains(symbol) && !m_symbolImages[symbol].isNull()) {
-        // Draw the image centered in the rect with some padding
         const qreal padding = qMin(rect.width(), rect.height()) * 0.1;
-        const QRectF imageRect = rect.adjusted(padding, padding, -padding, -padding);
+        QRectF imageRect = rect.adjusted(padding, padding, -padding, -padding);
+
+        // Berechne das skalierte Rechteck unter Beibehaltung des Seitenverhältnisses
+        const QSizeF pixmapSize = m_symbolImages[symbol].size();
+        const qreal sourceAspectRatio = pixmapSize.width() / pixmapSize.height();
+
+        if (const qreal targetAspectRatio = imageRect.width() / imageRect.height();
+            sourceAspectRatio > targetAspectRatio) {
+            // Bild ist breiter als Zielbereich - an Breite anpassen
+
+            const qreal newHeight = imageRect.width() / sourceAspectRatio;
+            const qreal yOffset = (imageRect.height() - newHeight) / 2;
+            imageRect.adjust(0, yOffset, 0, -yOffset);
+        } else {
+            // Bild ist höher als Zielbereich - an Höhe anpassen
+
+            const qreal newWidth = imageRect.height() * sourceAspectRatio;
+            const qreal xOffset = (imageRect.width() - newWidth) / 2;
+            imageRect.adjust(xOffset, 0, -xOffset, 0);
+        }
+
         painter->drawPixmap(imageRect.toRect(), m_symbolImages[symbol]);
-    } else {
-        // Fallback: draw colored rectangle with text if image not found
-        const QColor fallbackColors[] = {
-            QColor(0xFFD700), // Coin - Gold
-            QColor(0x228B22), // Kleeblatt - Green
-            QColor(0xFF0000), // Marienkaefer - Red
-            QColor(0xFFA500), // Sonne - Orange
-            QColor(0x8B0000)  // Teufel - Dark Red
-        };
-
-        painter->setBrush(fallbackColors[symbol]);
-        painter->setPen(Qt::white);
-        const qreal padding = qMin(rect.width(), rect.height()) * 0.1;
-        const QRectF fallbackRect = rect.adjusted(padding, padding, -padding, -padding);
-        painter->drawRect(fallbackRect);
-
-        QStringList symbolNames = {"COIN", "KLEEBLATT", "KÄFER", "SONNE", "TEUFEL"};
-        painter->drawText(fallbackRect, Qt::AlignCenter, symbolNames[symbol]);
     }
 }
 
-void SlotReel::setRotation(qreal rotation) {
+void SlotReel::setRotation(const qreal rotation) {
     if (qFuzzyCompare(m_rotation, rotation))
         return;
 
     m_rotation = rotation;
     emit rotationChanged();
     update();
+}
+
+void SlotReel::setMissProbability(const qreal probability) {
+    if (qFuzzyCompare(m_missProbability, probability))
+        return;
+
+    m_missProbability = qBound(0.0, probability, 1.0);
+    emit missProbabilityChanged();
 }
 
 void SlotReel::spin() {
@@ -160,18 +168,31 @@ void SlotReel::spin() {
     m_spinning = true;
     emit spinningChanged();
 
-    // Use dynamic symbol height for calculations
     const qreal currentSymbolHeight = symbolHeight();
     if (currentSymbolHeight <= 0) return;
 
-    // Calculate random final position
     const qreal currentRot = m_rotation;
-    const qreal spins = 2 + QRandomGenerator::global()->bounded(3); // 5-14 full rotations
+    const qreal spins = 2 + QRandomGenerator::global()->bounded(3); // 2-4 volle Umdrehungen
 
-    // Choose random final symbol position
+    const double rand = QRandomGenerator::global()->generateDouble();
+    qDebug() << "Random value for miss check:" << rand << " (miss probability:" << m_missProbability << ")";
+    // Bestimme, ob wir auf einer Niete landen
+    m_landOnMiss = rand < m_missProbability;
+    qDebug() << "Landing on miss set to:" << m_landOnMiss;
+
+    // Wähle zufällige Position
     const int finalSymbolIndex = QRandomGenerator::global()->bounded(SEQUENCE_LENGTH);
-    const qreal targetRotation = currentRot + (spins * currentSymbolHeight * SEQUENCE_LENGTH) +
-                                 (finalSymbolIndex * currentSymbolHeight);
+    qD
+
+    qreal targetRotation = currentRot + (spins * currentSymbolHeight * SEQUENCE_LENGTH);
+
+    if (m_landOnMiss) {
+        // Füge einen halben Symbolabstand hinzu für die Niete
+        targetRotation += (finalSymbolIndex + 0.5) * currentSymbolHeight;
+    } else {
+        // Lande direkt auf einem Symbol
+        targetRotation += finalSymbolIndex * currentSymbolHeight;
+    }
 
     m_spinAnimation->setStartValue(currentRot);
     m_spinAnimation->setEndValue(targetRotation);
