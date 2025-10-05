@@ -8,9 +8,9 @@
 
 class SlotReel : public QQuickPaintedItem {
     Q_OBJECT
-    Q_PROPERTY(qreal rotation READ rotation WRITE setRotation NOTIFY rotationChanged)
-    Q_PROPERTY(qreal missProbability READ missProbability WRITE setMissProbability NOTIFY missProbabilityChanged)
-    Q_PROPERTY(bool spinning READ spinning NOTIFY spinningChanged)
+    Q_PROPERTY(qreal rotation READ rotation WRITE set_rotation NOTIFY rotation_changed)
+    Q_PROPERTY(bool spinning READ spinning NOTIFY spinning_changed)
+    Q_PROPERTY(qreal miss_probability READ miss_probability WRITE set_miss_probability NOTIFY miss_probability_changed)
 
 public:
     explicit SlotReel(QQuickItem *parent = nullptr);
@@ -19,25 +19,25 @@ public:
 
     [[nodiscard]] qreal rotation() const { return m_rotation; }
     [[nodiscard]] bool spinning() const { return m_spinning; }
-    [[nodiscard]] double missProbability() const { return m_missProbability; }
+    [[nodiscard]] qreal miss_probability() const { return m_miss_probability; }
 
-    void setRotation(qreal rotation);
+    void set_rotation(qreal rotation);
 
-    Q_INVOKABLE void setMissProbability(qreal probability);
+    Q_INVOKABLE void set_miss_probability(qreal probability);
 
     Q_INVOKABLE void spin();
 
-    Q_INVOKABLE void setProbabilities(const QVariantMap &probabilities);
+    Q_INVOKABLE void set_probabilities(const QVariantMap &probabilities);
 
 signals:
-    void rotationChanged();
+    void rotation_changed();
 
-    void spinningChanged();
+    void spinning_changed();
 
-    void missProbabilityChanged();
+    void miss_probability_changed();
 
 private slots:
-    void onSpinFinished();
+    void on_spin_finished();
 
 private:
     enum Symbol {
@@ -48,26 +48,26 @@ private:
         Teufel = 4
     };
 
-    void loadImages();
+    void load_images();
 
-    void paintSymbol(QPainter *painter, Symbol symbol, const QRectF &rect);
+    void paint_symbol(QPainter *painter, Symbol symbol, const QRectF &rect);
 
-    Symbol getRandomSymbol();
+    Symbol get_random_symbol();
 
-    void buildSymbolSequence();
+    void build_symbol_sequence();
 
-    [[nodiscard]] qreal symbolHeight() const { return height(); }
+    [[nodiscard]] qreal symbol_height() const { return height(); }
 
-    qreal m_rotation;
     bool m_spinning;
-    QPropertyAnimation *m_spinAnimation;
+    qreal m_rotation;
+    qreal m_miss_probability;
+    qreal m_current_miss_offset; // 0.0 for hit, 0.5 for miss
+    qreal m_target_miss_offset; // Target offset after spin
 
-    QMap<Symbol, QPixmap> m_symbolImages;
-    QMap<Symbol, int> m_symbolProbabilities;
-    QVector<Symbol> m_symbolSequence;
+    QPropertyAnimation *m_spin_animation;
+    QMap<Symbol, QPixmap> m_symbol_images;
+    QMap<Symbol, int> m_symbol_probabilities;
+    QVector<Symbol> m_symbol_sequence;
 
-    qreal m_missProbability = 0.3; // 30% Chance für eine Niete
-    bool m_landOnMiss = false; // Zeigt an, ob das Reel auf einer Niete landen soll
-
-    static constexpr int SEQUENCE_LENGTH = 10;
+    static constexpr int SEQUENCE_LENGTH = 20;
 };

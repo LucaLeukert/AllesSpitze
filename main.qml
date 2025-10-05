@@ -22,7 +22,7 @@ ApplicationWindow {
 
             Component.onCompleted: {
                 // Set custom probabilities
-                setProbabilities({
+                set_probabilities({
                     "coin": 30,
                     "kleeblatt": 25,
                     "marienkaefer": 20,
@@ -30,7 +30,7 @@ ApplicationWindow {
                     "teufel": 10
                 });
 
-                setMissProbability(0.5);
+                set_miss_probability(0.5);
             }
         }
 
