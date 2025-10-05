@@ -10,11 +10,27 @@ find_package(Qt6 REQUIRED COMPONENTS
         Quick
 )
 
+# Erstelle eine QML Resource File
 qt_add_executable(AllesSpitzeQt
         main.cpp
+        SlotReel.h
         SlotReel.cpp
+        Symbol.h
         Symbol.cpp
+        I2CWorker.h
+        I2CWorker.cpp
+        DebugLogger.h
+        DebugLogger.cpp
         qml.qrc
+)
+
+# Füge QML Ressourcen direkt zum Target hinzu
+qt_add_qml_module(AllesSpitzeQt
+    URI SlotMachine
+    VERSION 1.0
+    QML_FILES
+        main.qml
+        DebugPanel.qml
 )
 
 target_link_libraries(AllesSpitzeQt PRIVATE

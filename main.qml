@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Window 2.15
 import SlotMachine 1.0
+import DebugTools 1.0
 
 ApplicationWindow {
     id: window
@@ -31,6 +32,7 @@ ApplicationWindow {
                 });
 
                 set_miss_probability(0.5);
+                DebugLogger.log("SlotReel initialized");
             }
         }
 
@@ -60,17 +62,32 @@ ApplicationWindow {
                 enabled: !reel.spinning
 
                 onClicked: {
+                    DebugLogger.log("Spin button clicked");
                     reel.spin();
                 }
             }
         }
+    }
 
-        // Debug info
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: reel.spinning ? "SPINNING..." : "READY"
-            color: "white"
-            font.pointSize: 12
+    // Debug Toggle Button (only in debug builds)
+    Button {
+        id: debugButton
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 10
+        width: 40
+        height: 40
+        text: "🔧"
+        font.pixelSize: 20
+        checkable: true
+        visible: true
+    }
+
+    // Debug Panel
+    Loader {
+        active: true
+        sourceComponent: DebugPanel {
+            id: debugPanel
         }
     }
 }

@@ -1,8 +1,8 @@
 #include "SlotReel.h"
+#include "DebugLogger.h"
 #include <QPainterPath>
 #include <QCoreApplication>
 #include <QDebug>
-#include <QtGlobal>
 #include <cmath>
 
 SlotReel::SlotReel(QQuickItem *parent)
@@ -13,7 +13,7 @@ SlotReel::SlotReel(QQuickItem *parent)
       , m_current_miss_offset(0.0)
       , m_target_miss_offset(0.0) {
     setWidth(300);
-    setHeight(300);
+    setHeight(500);
 
     // Initialize symbols with their images and probabilities
     m_symbols = {
@@ -157,9 +157,12 @@ void SlotReel::spin() {
     const qreal randomValue = QRandomGenerator::global()->generateDouble();
     const qreal should_miss = (randomValue < m_miss_probability) ? 0.5 : 0.0;
 
-    qDebug() << "Spin initiated. Random value:" << randomValue
-            << "Miss probability:" << m_miss_probability
-            << "Resulting in" << (should_miss == 0.5 ? "a miss." : "a hit.");
+#ifdef QT_DEBUG
+    DebugLogger::instance().log(QString("Spin initiated - Random: %1, Miss Prob: %2, Result: %3")
+        .arg(randomValue)
+        .arg(m_miss_probability)
+        .arg(should_miss == 0.5 ? "Miss" : "Hit"));
+#endif
 
     m_target_miss_offset = should_miss;
 
@@ -168,6 +171,12 @@ void SlotReel::spin() {
     const qreal baseTarget = (spins * SEQUENCE_LENGTH + finalSymbolIndex) * currentSymbolHeight;
     const qreal currentBaseRotation = m_rotation - (m_current_miss_offset * currentSymbolHeight);
     const qreal targetRotation = currentBaseRotation + baseTarget + (m_target_miss_offset * currentSymbolHeight);
+
+#ifdef QT_DEBUG
+    DebugLogger::instance().log(QString("Spin parameters - Spins: %1, Final Index: %2")
+        .arg(spins)
+        .arg(finalSymbolIndex));
+#endif
 
     m_spin_animation->setStartValue(m_rotation);
     m_spin_animation->setEndValue(targetRotation);
@@ -185,6 +194,10 @@ void SlotReel::on_spin_finished() {
     const qreal normalizedBase = fmod(baseRotation, sequenceHeight);
     m_rotation = (normalizedBase < 0 ? normalizedBase + sequenceHeight : normalizedBase)
                  + (m_current_miss_offset * currentSymbolHeight);
+
+#ifdef QT_DEBUG
+    DebugLogger::instance().log("Spin finished - Final rotation: " + QString::number(m_rotation));
+#endif
 
     emit spinning_changed();
     update();
