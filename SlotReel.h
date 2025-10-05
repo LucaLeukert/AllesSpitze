@@ -5,12 +5,15 @@
 #include <QPropertyAnimation>
 #include <QTimer>
 #include <QRandomGenerator>
+#include <QVariantMap>
+#include <QVector>
+#include "Symbol.h"
 
 class SlotReel : public QQuickPaintedItem {
     Q_OBJECT
     Q_PROPERTY(qreal rotation READ rotation WRITE set_rotation NOTIFY rotation_changed)
-    Q_PROPERTY(bool spinning READ spinning NOTIFY spinning_changed)
     Q_PROPERTY(qreal miss_probability READ miss_probability WRITE set_miss_probability NOTIFY miss_probability_changed)
+    Q_PROPERTY(bool spinning READ spinning NOTIFY spinning_changed)
 
 public:
     explicit SlotReel(QQuickItem *parent = nullptr);
@@ -40,19 +43,7 @@ private slots:
     void on_spin_finished();
 
 private:
-    enum Symbol {
-        Coin = 0,
-        Kleeblatt = 1,
-        Marienkaefer = 2,
-        Sonne = 3,
-        Teufel = 4
-    };
-
-    void load_images();
-
-    void paint_symbol(QPainter *painter, Symbol symbol, const QRectF &rect);
-
-    Symbol get_random_symbol();
+    static void paint_symbol(QPainter *painter, const Symbol &symbol, const QRectF &rect);
 
     void build_symbol_sequence();
 
@@ -61,12 +52,11 @@ private:
     bool m_spinning;
     qreal m_rotation;
     qreal m_miss_probability;
-    qreal m_current_miss_offset; // 0.0 for hit, 0.5 for miss
-    qreal m_target_miss_offset; // Target offset after spin
+    qreal m_current_miss_offset;
+    qreal m_target_miss_offset;
 
     QPropertyAnimation *m_spin_animation;
-    QMap<Symbol, QPixmap> m_symbol_images;
-    QMap<Symbol, int> m_symbol_probabilities;
+    QVector<Symbol> m_symbols;
     QVector<Symbol> m_symbol_sequence;
 
     static constexpr int SEQUENCE_LENGTH = 20;

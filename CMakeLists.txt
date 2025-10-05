@@ -12,11 +12,9 @@ find_package(Qt6 REQUIRED COMPONENTS
 
 qt_add_executable(AllesSpitzeQt
         main.cpp
-        SlotReel.h
         SlotReel.cpp
+        Symbol.cpp
         qml.qrc
-        SlotReel.cpp
-        SlotReel.h
 )
 
 target_link_libraries(AllesSpitzeQt PRIVATE
