@@ -72,14 +72,14 @@ QColor DebugLogger::levelToColor(LogLevel level) {
 void DebugLogger::logMessage(const QString& message, const LogLevel level) {
     const QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz");
     const QString levelStr = levelToString(level);
-    const QString formattedMessage = QString("[%1] [%2] %3\n").arg(timestamp, levelStr, message);
+    QString formattedMessage = QString("[%1] [%2] %3\n").arg(timestamp, levelStr, message);
 
     // Immer in die Datei schreiben
     writeToLogFile(formattedMessage);
 
     // Farbige Ausgabe für die UI
     const QString coloredMessage = QString("<font color='%1'>%2</font>")
-        .arg(levelToColor(level).name(), formattedMessage);
+        .arg(levelToColor(level).name(), formattedMessage.replace("\n", "<br>"));
     m_log_text.append(coloredMessage);
     emit logTextChanged();
 

@@ -57,8 +57,8 @@ Rectangle {
                 id: missProbabilitySpinner
                 from: 0
                 to: 100
-                value: reel.miss_probability * 100
-                onValueChanged: reel.miss_probability = value / 100
+                value: 50
+                onValueChanged: reel.set_miss_probability(value / 100.0)
             }
 
             Label {
