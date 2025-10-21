@@ -12,8 +12,8 @@ SlotReel::SlotReel(QQuickItem *parent)
       , m_miss_probability(0.0)
       , m_current_miss_offset(0.0)
       , m_target_miss_offset(0.0) {
-    setWidth(300);
-    setHeight(500);
+    setWidth(400);
+    setHeight(400);
 
     // Initialize symbols with their images and probabilities
     m_symbols = {

@@ -1,14 +1,17 @@
 #include "DebugLogger.h"
 #include <QDateTime>
-#include <QDebug>
 #include <QStandardPaths>
 #include <QDir>
+#include <QDebug>
 #include <QColor>
 
+DebugLogger& DebugLogger::instance() {
+    static DebugLogger instance;
+    return instance;
+}
+
 DebugLogger::DebugLogger(QObject *parent) : QObject(parent) {
-#ifdef QT_DEBUG
     openLogFile();
-#endif
 }
 
 DebugLogger::~DebugLogger() {
@@ -17,87 +20,118 @@ DebugLogger::~DebugLogger() {
     }
 }
 
+void DebugLogger::setVerbosity(LogVerbosity verbosity) {
+    if (m_verbosity != verbosity) {
+        m_verbosity = verbosity;
+
+        QString msg = QString("Logging verbosity changed to: %1")
+            .arg(verbosity == LogVerbosity::Verbose ? "VERBOSE" : "NORMAL");
+        info(msg);
+
+        emit verbosityChanged();
+    }
+}
+
 void DebugLogger::openLogFile() {
-    const QString logDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-    (void) QDir().mkpath(logDir);
+    QString logDir = QStandardPaths::writableLocation(
+        QStandardPaths::AppDataLocation
+    );
 
-    const QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd_hh-mm-ss");
-    const QString logPath = QString("%1/debug_%2.log").arg(logDir, timestamp);
+    QDir().mkpath(logDir);
 
-    m_logFile.setFileName(logPath);
-    if (!m_logFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append)) {
-        qWarning() << "Failed to open log file:" << logPath;
-        return;
+    QString timestamp = QDateTime::currentDateTime()
+        .toString("yyyy-MM-dd_HH-mm-ss");
+    QString logFileName = QString("%1/debug_%2.log")
+        .arg(logDir)
+        .arg(timestamp);
+
+    m_logFile.setFileName(logFileName);
+    if (m_logFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QString openMsg = QString("Log file opened: %1").arg(logFileName);
+        logMessage(openMsg, LogLevel::Debug);
+        qDebug() << openMsg;
+    } else {
+        qWarning() << "Failed to open log file:" << logFileName;
     }
-
-    log("Log file opened: " + logPath);
 }
 
-void DebugLogger::writeToLogFile(const QString &message) {
-    if (!m_logFile.isOpen()) {
-        return;
+void DebugLogger::writeToLogFile(const QString& message) {
+    if (m_logFile.isOpen()) {
+        QString timestamp = QDateTime::currentDateTime()
+            .toString("yyyy-MM-dd HH:mm:ss.zzz");
+        QString logEntry = QString("[%1] %2\n")
+            .arg(timestamp)
+            .arg(message);
+        m_logFile.write(logEntry.toUtf8());
+        m_logFile.flush();
     }
-
-    m_logFile.write(message.toUtf8());
-    m_logFile.flush();
 }
 
-DebugLogger &DebugLogger::instance() {
-    static DebugLogger instance;
-    return instance;
+bool DebugLogger::shouldLog(LogLevel level, bool verboseOnly) const {
+    // Verbose messages only shown in Verbose mode
+    if (verboseOnly && m_verbosity != LogVerbosity::Verbose) {
+        return false;
+    }
+
+    // In Normal mode, skip Debug messages
+    if (m_verbosity == LogVerbosity::Normal && level == LogLevel::Debug) {
+        return false;
+    }
+
+    return true;
+}
+
+void DebugLogger::logMessage(const QString& message, LogLevel level,
+                              bool verboseOnly) {
+    if (!shouldLog(level, verboseOnly)) {
+        return; // Skip this message
+    }
+
+    QString timestamp = QDateTime::currentDateTime()
+        .toString("HH:mm:ss.zzz");
+    QString levelStr = levelToString(level);
+
+    QString formattedMessage = QString("[%1] [%2] %3")
+        .arg(timestamp)
+        .arg(levelStr)
+        .arg(message);
+
+    // Add to in-memory log
+    m_log_text += formattedMessage + "\n";
+
+    // Keep only last 10000 characters in memory
+    if (m_log_text.length() > 10000) {
+        m_log_text = m_log_text.right(10000);
+    }
+
+    // Write to file (always write everything to file)
+    writeToLogFile(formattedMessage);
+
+    emit logTextChanged();
+
+    // Also output to console
+    qDebug().noquote() << formattedMessage;
 }
 
 QString DebugLogger::levelToString(LogLevel level) {
     switch (level) {
-        case LogLevel::Debug: return "DEBUG";
-        case LogLevel::Info: return "INFO";
-        case LogLevel::Warning: return "WARN";
-        case LogLevel::Error: return "ERROR";
-        case LogLevel::Critical: return "CRIT";
-        default: return "UNKNOWN";
+        case LogLevel::Debug:    return "DEBUG";
+        case LogLevel::Info:     return "INFO ";
+        case LogLevel::Warning:  return "WARN ";
+        case LogLevel::Error:    return "ERROR";
+        case LogLevel::Critical: return "CRIT ";
+        default:                 return "UNKNOWN";
     }
 }
 
 QColor DebugLogger::levelToColor(LogLevel level) {
     switch (level) {
-        case LogLevel::Debug: return QColor("#808080");    // Grau
-        case LogLevel::Info: return QColor("#FFFFFF");     // Weiß
-        case LogLevel::Warning: return QColor("#FFA500");  // Orange
-        case LogLevel::Error: return QColor("#FF0000");    // Rot
-        case LogLevel::Critical: return QColor("#FF00FF"); // Magenta
-        default: return QColor("#FFFFFF");
-    }
-}
-
-void DebugLogger::logMessage(const QString& message, const LogLevel level) {
-    const QString timestamp = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz");
-    const QString levelStr = levelToString(level);
-    QString formattedMessage = QString("[%1] [%2] %3\n").arg(timestamp, levelStr, message);
-
-    // Immer in die Datei schreiben
-    writeToLogFile(formattedMessage);
-
-    // Farbige Ausgabe für die UI
-    const QString coloredMessage = QString("<font color='%1'>%2</font>")
-        .arg(levelToColor(level).name(), formattedMessage.replace("\n", "<br>"));
-    m_log_text.append(coloredMessage);
-    emit logTextChanged();
-
-    // Konsolenausgabe je nach Level
-    switch (level) {
-        case LogLevel::Debug:
-            qDebug().noquote() << formattedMessage.trimmed();
-            break;
-        case LogLevel::Info:
-            qInfo().noquote() << formattedMessage.trimmed();
-            break;
-        case LogLevel::Warning:
-            qWarning().noquote() << formattedMessage.trimmed();
-            break;
-        case LogLevel::Error:
-        case LogLevel::Critical:
-            qCritical().noquote() << formattedMessage.trimmed();
-            break;
+        case LogLevel::Debug:    return {128, 128, 128};
+        case LogLevel::Info:     return {0, 128, 255};
+        case LogLevel::Warning:  return {255, 165, 0};
+        case LogLevel::Error:    return {255, 0, 0};
+        case LogLevel::Critical: return {139, 0, 0};
+        default:                 return {0, 0, 0};
     }
 }
 
@@ -121,6 +155,31 @@ void DebugLogger::critical(const QString& message) {
     logMessage(message, LogLevel::Critical);
 }
 
+void DebugLogger::verbose(const QString& message) {
+    logMessage(message, LogLevel::Debug, true); // verboseOnly = true
+}
+
 void DebugLogger::log(const QString& message) {
-    debug(message); // Legacy support
+    info(message); // Map legacy log() to info()
+}
+
+void DebugLogger::clearLog() {
+    m_log_text.clear();
+    emit logTextChanged();
+}
+
+QString DebugLogger::formatHexDump(const QByteArray& data) {
+    return formatHexDump(reinterpret_cast<const uint8_t*>(data.data()),
+                         data.size());
+}
+
+QString DebugLogger::formatHexDump(const uint8_t* data, int length) {
+    QString result;
+    for (int i = 0; i < length; ++i) {
+        result += QString("0x%1").arg(data[i], 2, 16, QChar('0'));
+        if (i < length - 1) {
+            result += " ";
+        }
+    }
+    return result;
 }

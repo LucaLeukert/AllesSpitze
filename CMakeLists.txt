@@ -39,14 +39,10 @@ qt_add_qml_module(AllesSpitzeQt
         URI SlotMachine
         VERSION 1.0
         QML_FILES
-        main.qml
-        DebugPanel.qml
+        qml/main.qml
+        qml/DebugPanel.qml
 )
 
 target_link_libraries(AllesSpitzeQt
         PRIVATE Qt6::Core Qt6::Quick
-)
-
-target_link_libraries(AllesSpitzeQt
-        PRIVATE wiringPi
 )
