@@ -6,7 +6,7 @@ import DebugTools 1.0
 
 ApplicationWindow {
     id: window
-    visible: true
+    visibility: "FullScreen"
     width: 1024
     height: 600
     title: "Slot Machine Reel"

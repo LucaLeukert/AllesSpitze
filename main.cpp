@@ -1,4 +1,4 @@
-#include <QGuiApplication>
+#include <QCoreApplication>
 #include <QtQml>
 #include <QThread>
 #include "SlotReel.h"
@@ -9,7 +9,7 @@ int main(int argc, char *argv[])
 {
     const QGuiApplication app(argc, argv);
 
-    qDebug() << "Main/UI Thread ID:" << QThread::currentThreadId();
+    qDebug() << "Main/UI Thread ID: " << QThread::currentThreadId();
 
 #ifdef QT_DEBUG
     qDebug() << "Debug build detected.";
@@ -43,10 +43,13 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("isDebugBuild", false);
 #endif
 
+    // Registriere I2CWorker als Kontexteigenschaft
+    engine.rootContext()->setContextProperty("i2cWorker", &i2cWorker);
+
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
 
     if (engine.rootObjects().isEmpty())
         return -1;
 
-    return app.exec();
+    return QGuiApplication::exec();
 }

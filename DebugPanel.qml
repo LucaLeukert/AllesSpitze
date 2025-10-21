@@ -11,7 +11,7 @@ Rectangle {
     visible: debugButton.checked
 
     width: 100
-    height: 80
+    height: 120
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     anchors.margins: 10
@@ -100,6 +100,12 @@ Rectangle {
                 Layout.columnSpan: 1
                 onClicked: logArea.clear()
             }
+        }
+
+        Button {
+            text: "I2C Test"
+            Layout.fillWidth: true
+            onClicked: i2cWorker.writeByte(0x00, 0x42)
         }
     }
 }

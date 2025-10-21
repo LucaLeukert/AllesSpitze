@@ -42,48 +42,6 @@ SlotReel::SlotReel(QQuickItem *parent)
             this, &SlotReel::on_spin_finished);
 }
 
-void SlotReel::build_symbol_sequence() {
-    m_symbol_sequence.clear();
-    m_symbol_sequence.reserve(SEQUENCE_LENGTH);
-
-    // Create weighted sequence based on probabilities
-    QVector<Symbol> weightedSymbols;
-    for (const auto &symbol : m_symbols) {
-        for (int i = 0; i < symbol.probability(); ++i) {
-            weightedSymbols.append(symbol);
-        }
-    }
-
-    // Build random sequence
-    for (int i = 0; i < SEQUENCE_LENGTH; ++i) {
-        const int randomIndex = QRandomGenerator::global()->bounded(weightedSymbols.size());
-        m_symbol_sequence.append(weightedSymbols[randomIndex]);
-    }
-}
-
-void SlotReel::set_probabilities(const QVariantMap &probabilities) {
-    QStringList symbolNames = {"coin", "kleeblatt", "marienkaefer", "sonne", "teufel"};
-
-    for (int i = 0; i < m_symbols.size() && i < symbolNames.size(); ++i) {
-        if (probabilities.contains(symbolNames[i])) {
-            if (const int prob = probabilities[symbolNames[i]].toInt(); prob > 0) {
-                m_symbols[i] = Symbol(":/images/" + symbolNames[i] + ".png", prob);
-            }
-        }
-    }
-
-    build_symbol_sequence();
-}
-
-void SlotReel::set_miss_probability(const qreal probability) {
-    const qreal clampedProb = qBound(0.0, probability, 1.0);
-    if (qFuzzyCompare(m_miss_probability, clampedProb))
-        return;
-
-    m_miss_probability = clampedProb;
-    emit miss_probability_changed();
-}
-
 void SlotReel::paint(QPainter *painter) {
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setRenderHint(QPainter::SmoothPixmapTransform);
@@ -112,29 +70,6 @@ void SlotReel::paint(QPainter *painter) {
     }
 }
 
-void SlotReel::paint_symbol(QPainter *painter, const Symbol &symbol, const QRectF &rect) {
-    if (const auto pixmap = symbol.pixmap(); pixmap && !pixmap->isNull()) {
-        const qreal padding = qMin(rect.width(), rect.height()) * 0.1;
-        QRectF imageRect = rect.adjusted(padding, padding, -padding, -padding);
-
-        const QSizeF pixmapSize = pixmap->size();
-        const qreal sourceAspectRatio = pixmapSize.width() / pixmapSize.height();
-
-        if (const qreal targetAspectRatio = imageRect.width() / imageRect.height();
-            sourceAspectRatio > targetAspectRatio) {
-            const qreal newHeight = imageRect.width() / sourceAspectRatio;
-            const qreal yOffset = (imageRect.height() - newHeight) / 2;
-            imageRect.adjust(0, yOffset, 0, -yOffset);
-        } else {
-            const qreal newWidth = imageRect.height() * sourceAspectRatio;
-            const qreal xOffset = (imageRect.width() - newWidth) / 2;
-            imageRect.adjust(xOffset, 0, -xOffset, 0);
-        }
-
-        painter->drawPixmap(imageRect.toRect(), *pixmap);
-    }
-}
-
 void SlotReel::set_rotation(const qreal rotation) {
     if (qFuzzyCompare(m_rotation, rotation))
         return;
@@ -142,6 +77,15 @@ void SlotReel::set_rotation(const qreal rotation) {
     m_rotation = rotation;
     emit rotation_changed();
     update();
+}
+
+void SlotReel::set_miss_probability(const qreal probability) {
+    const qreal clampedProb = qBound(0.0, probability, 1.0);
+    if (qFuzzyCompare(m_miss_probability, clampedProb))
+        return;
+
+    m_miss_probability = clampedProb;
+    emit miss_probability_changed();
 }
 
 void SlotReel::spin() {
@@ -183,6 +127,20 @@ void SlotReel::spin() {
     m_spin_animation->start();
 }
 
+void SlotReel::set_probabilities(const QVariantMap &probabilities) {
+    QStringList symbolNames = {"coin", "kleeblatt", "marienkaefer", "sonne", "teufel"};
+
+    for (int i = 0; i < m_symbols.size() && i < symbolNames.size(); ++i) {
+        if (probabilities.contains(symbolNames[i])) {
+            if (const int prob = probabilities[symbolNames[i]].toInt(); prob > 0) {
+                m_symbols[i] = Symbol(":/images/" + symbolNames[i] + ".png", prob);
+            }
+        }
+    }
+
+    build_symbol_sequence();
+}
+
 void SlotReel::on_spin_finished() {
     m_spinning = false;
     m_current_miss_offset = m_target_miss_offset;
@@ -201,4 +159,46 @@ void SlotReel::on_spin_finished() {
 
     emit spinning_changed();
     update();
+}
+
+void SlotReel::paint_symbol(QPainter *painter, const Symbol &symbol, const QRectF &rect) {
+    if (const auto pixmap = symbol.pixmap(); pixmap && !pixmap->isNull()) {
+        const qreal padding = qMin(rect.width(), rect.height()) * 0.1;
+        QRectF imageRect = rect.adjusted(padding, padding, -padding, -padding);
+
+        const QSizeF pixmapSize = pixmap->size();
+        const qreal sourceAspectRatio = pixmapSize.width() / pixmapSize.height();
+
+        if (const qreal targetAspectRatio = imageRect.width() / imageRect.height();
+            sourceAspectRatio > targetAspectRatio) {
+            const qreal newHeight = imageRect.width() / sourceAspectRatio;
+            const qreal yOffset = (imageRect.height() - newHeight) / 2;
+            imageRect.adjust(0, yOffset, 0, -yOffset);
+        } else {
+            const qreal newWidth = imageRect.height() * sourceAspectRatio;
+            const qreal xOffset = (imageRect.width() - newWidth) / 2;
+            imageRect.adjust(xOffset, 0, -xOffset, 0);
+        }
+
+        painter->drawPixmap(imageRect.toRect(), *pixmap);
+    }
+}
+
+void SlotReel::build_symbol_sequence() {
+    m_symbol_sequence.clear();
+    m_symbol_sequence.reserve(SEQUENCE_LENGTH);
+
+    // Create weighted sequence based on probabilities
+    QVector<Symbol> weightedSymbols;
+    for (const auto &symbol : m_symbols) {
+        for (int i = 0; i < symbol.probability(); ++i) {
+            weightedSymbols.append(symbol);
+        }
+    }
+
+    // Build random sequence
+    for (int i = 0; i < SEQUENCE_LENGTH; ++i) {
+        const int randomIndex = QRandomGenerator::global()->bounded(weightedSymbols.size());
+        m_symbol_sequence.append(weightedSymbols[randomIndex]);
+    }
 }
