@@ -328,7 +328,7 @@ void ApplicationController::updateButtonStates() const {
     } else {
         // Slot machine mode - update button highlights
         const bool canSpin = m_slotMachine->canSpin() && !m_slotMachine->isSpinning();
-        const bool canCashout = m_slotMachine->currentPrize() > 0 && !m_slotMachine->isSpinning();
+        const bool canCashout = m_slotMachine->currentPrize() > 0 && !m_slotMachine->isSpinning() && m_slotMachine->canSpin();
 
         // Button 0: Spin (active when can spin)
         QMetaObject::invokeMethod(m_worker.data(), "highlightButton",

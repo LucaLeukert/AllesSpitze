@@ -416,7 +416,7 @@ void SlotMachine::riskHigher() {
     m_risk_animation_position = m_risk_level;
 
     // 50% chance to win
-    std::uniform_int_distribution<int> dist(0, 1);
+    std::uniform_int_distribution dist(0, 1);
     bool willWin = dist(m_rng) == 1;
 
     // Calculate target position

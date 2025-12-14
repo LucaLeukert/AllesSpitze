@@ -9,19 +9,37 @@ SlotReel::SlotReel(QQuickItem *parent)
     : QQuickPaintedItem(parent)
       , m_spinning(false)
       , m_rotation(0.0)
-      , m_miss_probability(0.70)
+      , m_miss_probability(0.55)  // Reduced from 0.70 for better RTP
       , m_current_miss_offset(0.0)
       , m_target_miss_offset(0.0) {
     // Make it much larger to fill screen height
     setWidth(600);
     setHeight(600);
 
+    // Probabilities tuned for ~95% RTP
+    // Symbol frequency is INVERSE to reward value
+    // Total weight: 52 (excluding miss)
+    // Hit rate: 45% (miss 55%)
+    //
+    // Reward tiers (Level 1-5 multipliers):
+    // - Marienkäfer: 1, 2, 4, 7, 10    (LOW value)    -> HIGH frequency
+    // - Kleeblatt:   3, 8, 16, 29, 50  (MEDIUM value) -> MEDIUM frequency
+    // - Coin:        10, 40, 100, 200, 350 (HIGH value) -> LOW frequency
+    // - Sonne: increases ALL towers    (BONUS)        -> RARE
+    // - Teufel: resets ALL towers      (PENALTY)      -> MODERATE
+    //
+    // Expected symbol distribution when hitting:
+    // - Marienkäfer: 20/52 = 38.5% (common, low value)
+    // - Kleeblatt:   15/52 = 28.8% (medium frequency, medium value)
+    // - Coin:        5/52  = 9.6%  (rare, highest value)
+    // - Sonne:       4/52  = 7.7%  (rare, bonus)
+    // - Teufel:      8/52  = 15.4% (penalty - resets all)
     m_symbols = {
-        Symbol(":/images/marienkaefer.png", Symbol::Type::Marienkaefer, 3),
-        Symbol(":/images/coin.png",        Symbol::Type::Coin,         14),
-        Symbol(":/images/kleeblatt.png",   Symbol::Type::Kleeblatt,    24),
-        Symbol(":/images/sonne.png",       Symbol::Type::Sonne,         2),
-        Symbol(":/images/teufel.png",      Symbol::Type::Teufel,        9)
+        Symbol(":/images/marienkaefer.png", Symbol::Type::Marienkaefer, 20),
+        Symbol(":/images/coin.png",        Symbol::Type::Coin,          5),
+        Symbol(":/images/kleeblatt.png",   Symbol::Type::Kleeblatt,    15),
+        Symbol(":/images/sonne.png",       Symbol::Type::Sonne,         4),
+        Symbol(":/images/teufel.png",      Symbol::Type::Teufel,        8)
     };
 
 
