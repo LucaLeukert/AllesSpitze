@@ -46,6 +46,10 @@ private:
 
     void handleRawCommandResponse(uint8_t command, bool success, const QByteArray &response);
 
+    // Button handling
+    void handleButtonPress(uint8_t buttonId);
+    void updateButtonStates() const;
+
 private:
     QScopedPointer<QQmlApplicationEngine> m_engine;
     QScopedPointer<QThread> m_workerThread;

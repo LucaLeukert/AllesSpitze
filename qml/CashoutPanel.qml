@@ -12,8 +12,10 @@ Rectangle {
     property real currentPrize: 0.0
     property var towerPrizes: []
     property real currentBet: 1.0
+    property bool riskModeAvailable: currentPrize > 0
 
     signal cashoutRequested()
+    signal riskModeRequested()
 
     ColumnLayout {
         anchors.fill: parent
@@ -139,27 +141,84 @@ Rectangle {
             }
         }
 
-        // Cashout button
-        Rectangle {
+        // Action buttons
+        RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 60
-            color: currentPrize > 0 ? (cashoutArea.pressed ? "#2E7D32" : "#4CAF50") : "#444"
-            radius: 10
+            spacing: 8
 
-            Text {
-                anchors.centerIn: parent
-                text: currentPrize > 0 ? "AUSZAHLEN" : "Kein Gewinn"
-                font.pixelSize: 22
-                font.bold: true
-                color: currentPrize > 0 ? "white" : "#666"
+            // Cashout button
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 60
+                color: currentPrize > 0 ? (cashoutArea.pressed ? "#2E7D32" : "#4CAF50") : "#444"
+                radius: 10
+
+                Column {
+                    anchors.centerIn: parent
+                    spacing: 2
+
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: currentPrize > 0 ? "💰 AUSZAHLEN" : "Kein Gewinn"
+                        font.pixelSize: 16
+                        font.bold: true
+                        color: currentPrize > 0 ? "white" : "#666"
+                    }
+
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: currentPrize > 0 ? currentPrize.toFixed(2) + "€" : ""
+                        font.pixelSize: 12
+                        color: "#C8E6C9"
+                        visible: currentPrize > 0
+                    }
+                }
+
+                MouseArea {
+                    id: cashoutArea
+                    anchors.fill: parent
+                    enabled: currentPrize > 0
+                    onClicked: {
+                        cashoutPanel.cashoutRequested()
+                    }
+                }
             }
 
-            MouseArea {
-                id: cashoutArea
-                anchors.fill: parent
-                enabled: currentPrize > 0
-                onClicked: {
-                    cashoutPanel.cashoutRequested()
+            // Risk button
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 60
+                color: riskModeAvailable ? (riskArea.pressed ? "#CC5500" : "#FF6600") : "#444"
+                radius: 10
+                visible: true
+
+                Column {
+                    anchors.centerIn: parent
+                    spacing: 2
+
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: "🎲 RISIKO"
+                        font.pixelSize: 16
+                        font.bold: true
+                        color: riskModeAvailable ? "white" : "#666"
+                    }
+
+                    Text {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: riskModeAvailable ? "Verdoppeln!" : "---"
+                        font.pixelSize: 12
+                        color: riskModeAvailable ? "#FFE0B2" : "#666"
+                    }
+                }
+
+                MouseArea {
+                    id: riskArea
+                    anchors.fill: parent
+                    enabled: riskModeAvailable
+                    onClicked: {
+                        cashoutPanel.riskModeRequested()
+                    }
                 }
             }
         }
@@ -183,4 +242,3 @@ Rectangle {
         }
     }
 }
-

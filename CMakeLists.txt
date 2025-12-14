@@ -8,6 +8,11 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 set(QT_IMPORT_QML_PLUGINS OFF)
 
+# Add debug symbols even in Release builds for better crash debugging
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -g -O2")
+endif()
+
 # -----------------------------------------------------------------------------
 # Local macOS Qt installation path (for CLion code completion only)
 # -----------------------------------------------------------------------------
@@ -51,6 +56,7 @@ qt_add_qml_module(AllesSpitzeQt
         qml/I2CDebugPanel.qml
         qml/BetPanel.qml
         qml/CashoutPanel.qml
+        qml/RiskLadder.qml
 )
 
 target_link_libraries(AllesSpitzeQt

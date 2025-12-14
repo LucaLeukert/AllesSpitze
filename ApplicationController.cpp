@@ -44,8 +44,20 @@ void ApplicationController::initialize() {
 }
 
 bool ApplicationController::start() const {
+    if (!m_engine) {
+        qCritical() << "QML Engine is null!";
+        return false;
+    }
+
     m_engine->load(QUrl(QStringLiteral("qrc:/qml/main.qml")));
-    return !m_engine->rootObjects().isEmpty();
+
+    if (m_engine->rootObjects().isEmpty()) {
+        qCritical() << "Failed to load QML - no root objects created";
+        qCritical() << "QML Errors:" << m_engine->hasError();
+        return false;
+    }
+
+    return true;
 }
 
 void ApplicationController::setupQmlEngine() const {
@@ -80,11 +92,8 @@ void ApplicationController::setupConnections() {
     // Connect button events with proper cross-thread invocation
     connect(m_worker.data(), &I2CWorker::buttonEventsReceived,
             this, [this](const QVector<uint8_t> &buttons) {
-                if (!buttons.isEmpty() && m_slotMachine->canSpin()) {
-                    QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                              Q_ARG(uint8_t, 0),
-                                              Q_ARG(bool, false));
-                    m_slotMachine->spin();
+                for (const uint8_t buttonId : buttons) {
+                    handleButtonPress(buttonId);
                 }
             });
 
@@ -94,16 +103,38 @@ void ApplicationController::setupConnections() {
                 QMetaObject::invokeMethod(m_worker.data(), "updateUserBalance",
                                           Qt::QueuedConnection,
                                           Q_ARG(double, m_slotMachine->balance()));
+                // Initialize button states
+                updateButtonStates();
             });
 
-    // Re-enable button after spin
+    // Update button highlights when risk mode changes
+    connect(m_slotMachine.data(), &SlotMachine::riskModeChanged,
+            this, [this]() {
+                updateButtonStates();
+            });
+
+    // Update button highlights when can spin changes
     connect(m_slotMachine.data(), &SlotMachine::canSpinChanged,
             this, [this]() {
-                if (m_slotMachine->canSpin()) {
-                    QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                              Q_ARG(uint8_t, 0),
-                                              Q_ARG(bool, true));
-                }
+                updateButtonStates();
+            });
+
+    // Update button highlights when session active changes
+    connect(m_slotMachine.data(), &SlotMachine::sessionActiveChanged,
+            this, [this]() {
+                updateButtonStates();
+            });
+
+    // Update button highlights when prize changes
+    connect(m_slotMachine.data(), &SlotMachine::currentPrizeChanged,
+            this, [this]() {
+                updateButtonStates();
+            });
+
+    // Update button highlights when risk animating changes
+    connect(m_slotMachine.data(), &SlotMachine::riskAnimatingChanged,
+            this, [this]() {
+                updateButtonStates();
             });
 
     // Connect healthcheck response
@@ -230,5 +261,88 @@ void ApplicationController::loadBalance() const {
     } else {
         m_slotMachine->setBalance(100);
         DebugLogger::instance().error("Could not open balance file");
+    }
+}
+
+void ApplicationController::handleButtonPress(uint8_t buttonId) {
+    DebugLogger::instance().info(QString("Button %1 pressed").arg(buttonId));
+
+    if (m_slotMachine->riskModeActive()) {
+        // Risk mode active
+        if (buttonId == 0) {
+            // Button 0: Risk Higher (if not animating)
+            if (!m_slotMachine->riskAnimating()) {
+                m_slotMachine->riskHigher();
+                DebugLogger::instance().info("Risk Higher triggered by button 0");
+            }
+        } else if (buttonId == 1) {
+            // Button 1: Collect Prize (if not animating)
+            if (!m_slotMachine->riskAnimating()) {
+                m_slotMachine->collectRiskPrize();
+                DebugLogger::instance().info("Collect Prize triggered by button 1");
+            }
+        }
+    } else {
+        // Normal slot machine mode
+        if (buttonId == 0) {
+            // Button 0: Spin
+            if (m_slotMachine->canSpin()) {
+                m_slotMachine->spin();
+                DebugLogger::instance().info("Spin triggered by button 0");
+            }
+        } else if (buttonId == 1) {
+            // Button 1: Cashout
+            if (m_slotMachine->currentPrize() > 0) {
+                m_slotMachine->cashout();
+                DebugLogger::instance().info("Cashout triggered by button 1");
+            }
+        }
+    }
+
+    // Update button states after action
+    QTimer::singleShot(100, this, [this]() {
+        updateButtonStates();
+    });
+}
+
+void ApplicationController::updateButtonStates() const {
+    if (m_slotMachine->riskModeActive()) {
+        // Risk mode - update button highlights
+        const bool canRisk = !m_slotMachine->riskAnimating() && m_slotMachine->riskLevel() < 7;
+        const bool canCollect = !m_slotMachine->riskAnimating();
+
+        // Button 0: Risk Higher (orange/active when can risk)
+        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(uint8_t, 0),
+                                  Q_ARG(bool, canRisk));
+
+        // Button 1: Collect Prize (green/active when can collect)
+        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(uint8_t, 1),
+                                  Q_ARG(bool, canCollect));
+
+        DebugLogger::instance().verbose(QString("Risk mode buttons updated: Risk=%1, Collect=%2")
+            .arg(canRisk).arg(canCollect));
+    } else {
+        // Slot machine mode - update button highlights
+        const bool canSpin = m_slotMachine->canSpin() && !m_slotMachine->isSpinning();
+        const bool canCashout = m_slotMachine->currentPrize() > 0 && !m_slotMachine->isSpinning();
+
+        // Button 0: Spin (active when can spin)
+        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(uint8_t, 0),
+                                  Q_ARG(bool, canSpin));
+
+        // Button 1: Cashout (active when has prize)
+        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(uint8_t, 1),
+                                  Q_ARG(bool, canCashout));
+
+        DebugLogger::instance().verbose(QString("Slot mode buttons updated: Spin=%1, Cashout=%2")
+            .arg(canSpin).arg(canCashout));
     }
 }

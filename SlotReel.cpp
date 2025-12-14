@@ -90,20 +90,22 @@ void SlotReel::spin() {
     if (m_spinning)
         return;
 
+    // Stop any running animation first (safely)
+    if (m_spin_animation->state() == QAbstractAnimation::Running) {
+        m_spin_animation->stop();
+    }
+
     m_spinning = true;
     emit spinning_changed();
 
     const qreal currentSymbolHeight = symbol_height();
     if (currentSymbolHeight <= 0) return;
 
-    // Normalize rotation BEFORE spinning to prevent overflow
     const qreal sequenceHeight = currentSymbolHeight * SEQUENCE_LENGTH;
-    const qreal baseRotation = m_rotation - (m_current_miss_offset * currentSymbolHeight);
-    const qreal normalizedBase = fmod(baseRotation, sequenceHeight);
-    const qreal normalizedRotation = (normalizedBase < 0 ? normalizedBase + sequenceHeight : normalizedBase)
-                                     + (m_current_miss_offset * currentSymbolHeight);
 
-    // Update current rotation to normalized value
+    // Simple normalization - same as paint() uses
+    qreal normalizedRotation = fmod(m_rotation, sequenceHeight);
+    if (normalizedRotation < 0) normalizedRotation += sequenceHeight;
     m_rotation = normalizedRotation;
 
     const qreal randomValue = QRandomGenerator::global()->generateDouble();
@@ -111,13 +113,11 @@ void SlotReel::spin() {
 
     m_target_miss_offset = should_miss;
 
-    // Reduced spin distance - only 3-5 symbols
+    // Spin 3-5 symbols
     const int symbolsToSpin = 3 + QRandomGenerator::global()->bounded(3);
-    const qreal baseTarget = symbolsToSpin * currentSymbolHeight;
+    const qreal spinDistance = symbolsToSpin * currentSymbolHeight + (m_target_miss_offset * currentSymbolHeight);
 
-    // Calculate target from normalized rotation
-    const qreal currentBaseRotation = m_rotation - (m_current_miss_offset * currentSymbolHeight);
-    const qreal targetRotation = currentBaseRotation + baseTarget + (m_target_miss_offset * currentSymbolHeight);
+    const qreal targetRotation = m_rotation + spinDistance;
 
     m_spin_animation->setStartValue(m_rotation);
     m_spin_animation->setEndValue(targetRotation);
@@ -125,9 +125,10 @@ void SlotReel::spin() {
 
 #ifdef QT_DEBUG
     DebugLogger::instance().verbose(
-        QString("Spin - Normalized rotation: %1, Target: %2")
+        QString("Spin - Start: %1, Target: %2, Miss offset: %3")
             .arg(m_rotation)
             .arg(targetRotation)
+            .arg(m_target_miss_offset)
     );
 #endif
 }
@@ -164,13 +165,8 @@ void SlotReel::on_spin_finished() {
     m_spinning = false;
     m_current_miss_offset = m_target_miss_offset;
 
-    const qreal currentSymbolHeight = symbol_height();
-    const qreal sequenceHeight = currentSymbolHeight * SEQUENCE_LENGTH;
-
-    const qreal baseRotation = m_rotation - (m_current_miss_offset * currentSymbolHeight);
-    const qreal normalizedBase = fmod(baseRotation, sequenceHeight);
-    m_rotation = (normalizedBase < 0 ? normalizedBase + sequenceHeight : normalizedBase)
-                 + (m_current_miss_offset * currentSymbolHeight);
+    // DON'T modify m_rotation here - keep it exactly as the animation left it
+    // The visual state should match what updateCurrentSymbol calculates
 
     updateCurrentSymbol();
 
@@ -180,23 +176,75 @@ void SlotReel::on_spin_finished() {
 
 void SlotReel::updateCurrentSymbol() {
     const qreal currentSymbolHeight = symbol_height();
+    if (currentSymbolHeight <= 0) return;
 
-    if (m_target_miss_offset > 0.0) {
+    const qreal sequenceHeight = currentSymbolHeight * SEQUENCE_LENGTH;
+
+    // Use EXACTLY the same calculation as paint()
+    qreal currentOffset = fmod(m_rotation, sequenceHeight);
+    if (currentOffset < 0) currentOffset += sequenceHeight;
+
+    const int startIndex = static_cast<int>(currentOffset / currentSymbolHeight);
+
+    // Calculate symbolY for startIndex - same as paint() does for i=0
+    // symbolY = startIndex * currentSymbolHeight - currentOffset
+    // This is always <= 0 (symbol is at or above viewport top)
+    const qreal symbolY_for_startIndex = startIndex * currentSymbolHeight - currentOffset;
+
+    // symbolY_for_startIndex ranges from 0 (perfectly aligned) to -currentSymbolHeight (next symbol aligned)
+    // When symbolY is 0: startIndex fills the viewport
+    // When symbolY is -height/2: we're between startIndex and startIndex+1 (MISS)
+    // When symbolY is -height: startIndex+1 fills the viewport
+
+    // Calculate how much of startIndex is visible (0 to 1)
+    // visible = 1 + (symbolY / height)  [since symbolY is negative or 0]
+    const qreal visibleFraction = 1.0 + (symbolY_for_startIndex / currentSymbolHeight);
+
+    // If more than 75% of a symbol is visible, it's the result
+    // If between 25% and 75%, it's a miss (between symbols)
+    const qreal alignmentThreshold = 0.75;
+
+    int visibleSymbolIndex;
+    bool isBetweenSymbols;
+
+    if (visibleFraction >= alignmentThreshold) {
+        // startIndex is mostly visible
+        visibleSymbolIndex = startIndex;
+        isBetweenSymbols = false;
+    } else if (visibleFraction <= (1.0 - alignmentThreshold)) {
+        // startIndex+1 is mostly visible
+        visibleSymbolIndex = startIndex + 1;
+        isBetweenSymbols = false;
+    } else {
+        // Between symbols - this is a miss
+        visibleSymbolIndex = -1;
+        isBetweenSymbols = true;
+    }
+
+    // Normalize index
+    if (visibleSymbolIndex >= 0) {
+        visibleSymbolIndex = visibleSymbolIndex % SEQUENCE_LENGTH;
+        if (visibleSymbolIndex < 0) visibleSymbolIndex += SEQUENCE_LENGTH;
+    }
+
+    // Result is based ONLY on visual position, not on m_target_miss_offset
+    if (isBetweenSymbols) {
         m_is_miss = true;
         m_current_symbol_type = Symbol::Type::Unknown;
 
-        DebugLogger::instance().info("Spin result: MISS");
+        DebugLogger::instance().info(QString("Spin result: MISS (offset: %1, symbolY: %2, visible: %3)")
+            .arg(currentOffset).arg(symbolY_for_startIndex).arg(visibleFraction));
     } else {
         m_is_miss = false;
-
-        const qreal rotation = m_rotation - (m_current_miss_offset * currentSymbolHeight);
-        const int symbolIndex = static_cast<int>(rotation / currentSymbolHeight) % SEQUENCE_LENGTH;
-
-        m_current_symbol_type = m_symbol_sequence[symbolIndex].type();
+        m_current_symbol_type = m_symbol_sequence[visibleSymbolIndex].type();
 
         DebugLogger::instance().info(
-            QString("Spin result: %1")
+            QString("Spin result: %1 (index: %2, offset: %3, symbolY: %4, visible: %5)")
                 .arg(Symbol::typeToString(m_current_symbol_type))
+                .arg(visibleSymbolIndex)
+                .arg(currentOffset)
+                .arg(symbolY_for_startIndex)
+                .arg(visibleFraction)
         );
     }
 

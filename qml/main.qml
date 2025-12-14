@@ -16,9 +16,10 @@ ApplicationWindow {
     SlotReel {
         id: reel
         objectName: "mainReel"
-        anchors.centerIn: parent  // Center in the window
+        anchors.centerIn: parent
         width: 600
         height: 1080
+        visible: !slotMachine.riskModeActive
 
         Component.onCompleted: {
             DebugLogger.log("SlotReel initialized h");
@@ -26,6 +27,25 @@ ApplicationWindow {
             // Connect to slot machine
             slotMachine.setReel(reel);
         }
+    }
+
+    // Risk Ladder - shown when risk mode is active (centered)
+    RiskLadder {
+        id: riskLadder
+        anchors.centerIn: parent
+        width: 450
+        height: 700
+        visible: slotMachine.riskModeActive
+
+        active: slotMachine.riskModeActive
+        currentPrize: slotMachine.riskPrize
+        basePrize: slotMachine.riskPrize / Math.pow(2, slotMachine.riskLevel) // Calculate base prize
+        currentLevel: slotMachine.riskLevel
+        animating: slotMachine.riskAnimating
+        animationPosition: slotMachine.riskAnimationPosition
+
+        onRiskHigher: slotMachine.riskHigher()
+        onCollectPrize: slotMachine.collectRiskPrize()
     }
 
     // Bet Panel - bottom left (always visible, touch-friendly)
@@ -36,6 +56,7 @@ ApplicationWindow {
         anchors.margins: 20
         width: 280
         height: 420
+        visible: !slotMachine.riskModeActive
 
         currentBet: slotMachine.bet
         balance: slotMachine.balance
@@ -50,7 +71,7 @@ ApplicationWindow {
         }
     }
 
-    // Cashout Panel - bottom right (always visible)
+    // Cashout Panel - bottom right (hidden during risk mode)
     CashoutPanel {
         id: cashoutPanel
         anchors.right: parent.right
@@ -58,12 +79,48 @@ ApplicationWindow {
         anchors.margins: 20
         width: 300
         height: 420
+        visible: !slotMachine.riskModeActive
 
         currentPrize: slotMachine.currentPrize
         towerPrizes: slotMachine.towerPrizes
         currentBet: slotMachine.bet
 
         onCashoutRequested: slotMachine.cashout()
+        onRiskModeRequested: slotMachine.startRiskMode()
+    }
+
+    // Balance display during risk mode (top right)
+    Rectangle {
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 20
+        width: 200
+        height: 80
+        color: "#2a2a2a"
+        radius: 10
+        border.color: "#FFD700"
+        border.width: 2
+        visible: slotMachine.riskModeActive
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 4
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "GUTHABEN"
+                font.pixelSize: 14
+                color: "#888"
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: slotMachine.balance.toFixed(2) + " €"
+                font.pixelSize: 24
+                font.bold: true
+                color: "#FFD700"
+            }
+        }
     }
 
     Loader {
@@ -91,7 +148,7 @@ ApplicationWindow {
         id: i2cDebugLoader
         active: isDebugBuild
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
+        anchors.bottom: parent.borrom
         sourceComponent: I2CDebugPanel {
             width: 400
             height: 500
@@ -109,6 +166,23 @@ ApplicationWindow {
                     i2cDebugLoader.item.onRawCommandResponse(command, success, response)
                 }
             }
+        }
+    }
+
+    // Risk mode result notifications
+    Connections {
+        target: slotMachine
+
+        function onRiskWon(newPrize) {
+            console.log("Risk won! New prize: " + newPrize)
+        }
+
+        function onRiskLost() {
+            console.log("Risk lost! Prize forfeited.")
+        }
+
+        function onRiskCollected(amount) {
+            console.log("Risk prize collected: " + amount)
         }
     }
 }

@@ -7,8 +7,18 @@
 #include <QFile>
 #include <QTextStream>
 #include <cmath>
+#include <chrono>
 
 SlotMachine::SlotMachine(QObject *parent) : QObject(parent) {
+    // Initialize random number generator
+    auto seed = std::chrono::steady_clock::now().time_since_epoch().count();
+    m_rng.seed(static_cast<unsigned int>(seed));
+
+    // Initialize risk animation timer
+    m_risk_animation_timer = new QTimer(this);
+    m_risk_animation_timer->setInterval(80); // Fast animation
+    connect(m_risk_animation_timer, &QTimer::timeout, this, &SlotMachine::onRiskAnimationStep);
+
     // Create 3 towers with Qt parent ownership
     // Order: Coin (0), Kleeblatt (1), Marienkaefer (2)
     auto *tower1 = new Tower(Symbol::Type::Coin, 0, this);
@@ -335,4 +345,210 @@ void SlotMachine::saveBalance() {
     } else {
         DebugLogger::instance().error("Could not save balance to file");
     }
+}
+
+// ===== RISK LADDER FUNCTIONS =====
+
+QVariantList SlotMachine::riskLadderSteps() const {
+    QVariantList steps;
+    for (int i = 0; i < RISK_LADDER_STEPS; ++i) {
+        QVariantMap step;
+        step["level"] = i;
+        step["multiplier"] = RISK_MULTIPLIERS[i];
+        step["prize"] = m_risk_base_prize * RISK_MULTIPLIERS[i];
+        steps.append(step);
+    }
+    return steps;
+}
+
+void SlotMachine::startRiskMode() {
+    double prize = currentPrize();
+
+    if (prize <= 0) {
+        DebugLogger::instance().warning("Cannot start risk mode without a prize");
+        return;
+    }
+
+    if (m_risk_mode_active) {
+        DebugLogger::instance().warning("Risk mode already active");
+        return;
+    }
+
+    DebugLogger::instance().info(QString("🎲 Starting risk mode with prize: %1").arg(prize));
+
+    // Store the prize and reset towers (prize is now "at risk")
+    m_risk_base_prize = prize;
+    m_risk_prize = prize;
+    m_risk_level = 0;
+    m_risk_mode_active = true;
+    m_risk_animating = false;
+    m_risk_animation_position = 0;
+
+    // Reset towers without adding to balance
+    for (auto *tower: m_towers) {
+        tower->reset();
+        updatePhysicalTower(tower->towerId());
+    }
+    updatePrize();
+    updateSessionState();
+
+    emit riskModeChanged();
+    emit riskPrizeChanged();
+    emit riskLevelChanged();
+    emit canSpinChanged();
+    emit canChangeBetChanged();
+}
+
+void SlotMachine::riskHigher() {
+    if (!m_risk_mode_active || m_risk_animating) {
+        return;
+    }
+
+    if (m_risk_level >= RISK_LADDER_STEPS - 1) {
+        DebugLogger::instance().info("Already at top of risk ladder");
+        return;
+    }
+
+    DebugLogger::instance().info(QString("🎲 Attempting to climb risk ladder from level %1").arg(m_risk_level));
+
+    // Start the animation
+    m_risk_animating = true;
+    m_risk_animation_position = m_risk_level;
+
+    // 50% chance to win
+    std::uniform_int_distribution<int> dist(0, 1);
+    bool willWin = dist(m_rng) == 1;
+
+    // Calculate target position
+    if (willWin) {
+        m_risk_target_position = m_risk_level + 1;
+    } else {
+        m_risk_target_position = -1; // Indicates loss
+    }
+
+    emit riskAnimatingChanged();
+    emit riskAnimationPositionChanged();
+
+    // Start animation timer
+    m_risk_animation_timer->start();
+}
+
+void SlotMachine::onRiskAnimationStep() {
+    // Animate the position bouncing up and down
+    static int animationSteps = 0;
+    static bool goingUp = true;
+
+    animationSteps++;
+
+    if (animationSteps < 15) {
+        // Bounce animation
+        if (goingUp) {
+            m_risk_animation_position++;
+            if (m_risk_animation_position >= RISK_LADDER_STEPS - 1) {
+                goingUp = false;
+            }
+        } else {
+            m_risk_animation_position--;
+            if (m_risk_animation_position <= 0) {
+                goingUp = true;
+            }
+        }
+        emit riskAnimationPositionChanged();
+    } else {
+        // Animation finished, show result
+        m_risk_animation_timer->stop();
+        animationSteps = 0;
+        goingUp = true;
+
+        bool won = m_risk_target_position > m_risk_level;
+        finishRiskAttempt(won);
+    }
+}
+
+void SlotMachine::finishRiskAttempt(bool won) {
+    m_risk_animating = false;
+    emit riskAnimatingChanged();
+
+    if (won) {
+        m_risk_level++;
+        m_risk_prize = m_risk_base_prize * RISK_MULTIPLIERS[m_risk_level];
+        m_risk_animation_position = m_risk_level;
+
+        DebugLogger::instance().info(QString("🎉 Risk won! New level: %1, Prize: %2").arg(m_risk_level).arg(m_risk_prize));
+
+        emit riskLevelChanged();
+        emit riskPrizeChanged();
+        emit riskAnimationPositionChanged();
+        emit riskWon(m_risk_prize);
+
+        // Auto-collect at max level
+        if (m_risk_level >= RISK_LADDER_STEPS - 1) {
+            DebugLogger::instance().info("🏆 Reached top of risk ladder! Auto-collecting.");
+            collectRiskPrize();
+        }
+    } else {
+        // Check if we're above the checkpoint level (Ausspielung)
+        if (m_risk_level > RISK_CHECKPOINT_LEVEL) {
+            // Fall back to checkpoint level instead of losing everything
+            DebugLogger::instance().info(QString("📍 Falling back to Ausspielung checkpoint (Level %1)").arg(RISK_CHECKPOINT_LEVEL));
+
+            m_risk_level = RISK_CHECKPOINT_LEVEL;
+            m_risk_prize = m_risk_base_prize * RISK_MULTIPLIERS[m_risk_level];
+            m_risk_animation_position = m_risk_level;
+
+            emit riskLevelChanged();
+            emit riskPrizeChanged();
+            emit riskAnimationPositionChanged();
+            // Don't emit riskLost - player still has prize at checkpoint
+        } else {
+            // At or below checkpoint - lose everything
+            DebugLogger::instance().info("💀 Risk lost! Prize forfeited.");
+
+            m_risk_animation_position = -1;
+            emit riskAnimationPositionChanged();
+
+            // Lost everything
+            m_risk_prize = 0;
+            m_risk_level = 0;
+            m_risk_base_prize = 0;
+            m_risk_mode_active = false;
+
+            emit riskPrizeChanged();
+            emit riskLevelChanged();
+            emit riskModeChanged();
+            emit riskLost();
+            emit canSpinChanged();
+            emit canChangeBetChanged();
+        }
+    }
+}
+
+void SlotMachine::collectRiskPrize() {
+    if (!m_risk_mode_active) {
+        return;
+    }
+
+    double prize = m_risk_prize;
+
+    DebugLogger::instance().info(QString("💰 Collecting risk prize: %1").arg(prize));
+
+    // Add to balance
+    m_balance += prize;
+    saveBalance();
+    emit balanceChanged();
+
+    // Reset risk state
+    m_risk_mode_active = false;
+    m_risk_prize = 0;
+    m_risk_base_prize = 0;
+    m_risk_level = 0;
+    m_risk_animation_position = 0;
+
+    emit riskModeChanged();
+    emit riskPrizeChanged();
+    emit riskLevelChanged();
+    emit riskAnimationPositionChanged();
+    emit riskCollected(prize);
+    emit canSpinChanged();
+    emit canChangeBetChanged();
 }

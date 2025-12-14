@@ -4,6 +4,7 @@
         <file>qml/I2CDebugPanel.qml</file>
         <file>qml/BetPanel.qml</file>
         <file>qml/CashoutPanel.qml</file>
+        <file>qml/RiskLadder.qml</file>
         <file>images/coin.png</file>
         <file>images/kleeblatt.png</file>
         <file>images/marienkaefer.png</file>
