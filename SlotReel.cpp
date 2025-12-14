@@ -9,22 +9,22 @@ SlotReel::SlotReel(QQuickItem *parent)
     : QQuickPaintedItem(parent)
       , m_spinning(false)
       , m_rotation(0.0)
-      , m_miss_probability(0.0)
+      , m_miss_probability(0.70)
       , m_current_miss_offset(0.0)
       , m_target_miss_offset(0.0) {
-    setWidth(400);
-    setHeight(400);
+    // Make it much larger to fill screen height
+    setWidth(600);
+    setHeight(600);
 
-    // Initialize symbols with their images and probabilities
     m_symbols = {
-        Symbol(":/images/coin.png", 30),
-        Symbol(":/images/kleeblatt.png", 25),
-        Symbol(":/images/marienkaefer.png", 20),
-        Symbol(":/images/sonne.png", 15),
-        Symbol(":/images/teufel.png", 10)
+        Symbol(":/images/marienkaefer.png", Symbol::Type::Marienkaefer, 3),
+        Symbol(":/images/coin.png",        Symbol::Type::Coin,         14),
+        Symbol(":/images/kleeblatt.png",   Symbol::Type::Kleeblatt,    24),
+        Symbol(":/images/sonne.png",       Symbol::Type::Sonne,         2),
+        Symbol(":/images/teufel.png",      Symbol::Type::Teufel,        9)
     };
 
-    // Verify all symbols loaded correctly
+
     for (const auto &symbol : m_symbols) {
         if (!symbol.isValid()) {
             qWarning() << "Failed to load symbol image";
@@ -45,7 +45,6 @@ SlotReel::SlotReel(QQuickItem *parent)
 void SlotReel::paint(QPainter *painter) {
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setRenderHint(QPainter::SmoothPixmapTransform);
-
     painter->setClipRect(boundingRect());
 
     const qreal currentSymbolHeight = symbol_height();
@@ -53,7 +52,6 @@ void SlotReel::paint(QPainter *painter) {
 
     const qreal sequenceHeight = currentSymbolHeight * SEQUENCE_LENGTH;
     const qreal currentOffset = fmod(m_rotation, sequenceHeight);
-
     const int startIndex = static_cast<int>(currentOffset / currentSymbolHeight);
 
     for (int i = -1; i <= 1; ++i) {
@@ -98,43 +96,64 @@ void SlotReel::spin() {
     const qreal currentSymbolHeight = symbol_height();
     if (currentSymbolHeight <= 0) return;
 
+    // Normalize rotation BEFORE spinning to prevent overflow
+    const qreal sequenceHeight = currentSymbolHeight * SEQUENCE_LENGTH;
+    const qreal baseRotation = m_rotation - (m_current_miss_offset * currentSymbolHeight);
+    const qreal normalizedBase = fmod(baseRotation, sequenceHeight);
+    const qreal normalizedRotation = (normalizedBase < 0 ? normalizedBase + sequenceHeight : normalizedBase)
+                                     + (m_current_miss_offset * currentSymbolHeight);
+
+    // Update current rotation to normalized value
+    m_rotation = normalizedRotation;
+
     const qreal randomValue = QRandomGenerator::global()->generateDouble();
     const qreal should_miss = (randomValue < m_miss_probability) ? 0.5 : 0.0;
 
-#ifdef QT_DEBUG
-    DebugLogger::instance().log(QString("Spin initiated - Random: %1, Miss Prob: %2, Result: %3")
-        .arg(randomValue)
-        .arg(m_miss_probability)
-        .arg(should_miss == 0.5 ? "Miss" : "Hit"));
-#endif
-
     m_target_miss_offset = should_miss;
 
-    const int spins = 1 + QRandomGenerator::global()->bounded(2);
-    const int finalSymbolIndex = QRandomGenerator::global()->bounded(SEQUENCE_LENGTH);
-    const qreal baseTarget = (spins * SEQUENCE_LENGTH + finalSymbolIndex) * currentSymbolHeight;
+    // Reduced spin distance - only 3-5 symbols
+    const int symbolsToSpin = 3 + QRandomGenerator::global()->bounded(3);
+    const qreal baseTarget = symbolsToSpin * currentSymbolHeight;
+
+    // Calculate target from normalized rotation
     const qreal currentBaseRotation = m_rotation - (m_current_miss_offset * currentSymbolHeight);
     const qreal targetRotation = currentBaseRotation + baseTarget + (m_target_miss_offset * currentSymbolHeight);
-
-#ifdef QT_DEBUG
-    DebugLogger::instance().log(QString("Spin parameters - Spins: %1, Final Index: %2")
-        .arg(spins)
-        .arg(finalSymbolIndex));
-#endif
 
     m_spin_animation->setStartValue(m_rotation);
     m_spin_animation->setEndValue(targetRotation);
     m_spin_animation->start();
+
+#ifdef QT_DEBUG
+    DebugLogger::instance().verbose(
+        QString("Spin - Normalized rotation: %1, Target: %2")
+            .arg(m_rotation)
+            .arg(targetRotation)
+    );
+#endif
 }
 
 void SlotReel::set_probabilities(const QVariantMap &probabilities) {
-    QStringList symbolNames = {"coin", "kleeblatt", "marienkaefer", "sonne", "teufel"};
+    struct SymbolConfig {
+        QString key;
+        Symbol::Type type;
+        QString path;
+    };
 
-    for (int i = 0; i < m_symbols.size() && i < symbolNames.size(); ++i) {
-        if (probabilities.contains(symbolNames[i])) {
-            if (const int prob = probabilities[symbolNames[i]].toInt(); prob > 0) {
-                m_symbols[i] = Symbol(":/images/" + symbolNames[i] + ".png", prob);
-            }
+    QVector<SymbolConfig> configs = {
+        {"coin", Symbol::Type::Coin, ":/images/coin.png"},
+        {"kleeblatt", Symbol::Type::Kleeblatt, ":/images/kleeblatt.png"},
+        {"marienkaefer", Symbol::Type::Marienkaefer, ":/images/marienkaefer.png"},
+        {"sonne", Symbol::Type::Sonne, ":/images/sonne.png"},
+        {"teufel", Symbol::Type::Teufel, ":/images/teufel.png"}
+    };
+
+    m_symbols.clear();
+    for (const auto &config : configs) {
+        int prob = probabilities.contains(config.key)
+            ? probabilities[config.key].toInt()
+            : 20;
+        if (prob > 0) {
+            m_symbols.append(Symbol(config.path, config.type, prob));
         }
     }
 
@@ -153,12 +172,36 @@ void SlotReel::on_spin_finished() {
     m_rotation = (normalizedBase < 0 ? normalizedBase + sequenceHeight : normalizedBase)
                  + (m_current_miss_offset * currentSymbolHeight);
 
-#ifdef QT_DEBUG
-    DebugLogger::instance().log("Spin finished - Final rotation: " + QString::number(m_rotation));
-#endif
+    updateCurrentSymbol();
 
     emit spinning_changed();
     update();
+}
+
+void SlotReel::updateCurrentSymbol() {
+    const qreal currentSymbolHeight = symbol_height();
+
+    if (m_target_miss_offset > 0.0) {
+        m_is_miss = true;
+        m_current_symbol_type = Symbol::Type::Unknown;
+
+        DebugLogger::instance().info("Spin result: MISS");
+    } else {
+        m_is_miss = false;
+
+        const qreal rotation = m_rotation - (m_current_miss_offset * currentSymbolHeight);
+        const int symbolIndex = static_cast<int>(rotation / currentSymbolHeight) % SEQUENCE_LENGTH;
+
+        m_current_symbol_type = m_symbol_sequence[symbolIndex].type();
+
+        DebugLogger::instance().info(
+            QString("Spin result: %1")
+                .arg(Symbol::typeToString(m_current_symbol_type))
+        );
+    }
+
+    emit currentSymbolTypeChanged();
+    emit isMissChanged();
 }
 
 void SlotReel::paint_symbol(QPainter *painter, const Symbol &symbol, const QRectF &rect) {
@@ -188,7 +231,6 @@ void SlotReel::build_symbol_sequence() {
     m_symbol_sequence.clear();
     m_symbol_sequence.reserve(SEQUENCE_LENGTH);
 
-    // Create weighted sequence based on probabilities
     QVector<Symbol> weightedSymbols;
     for (const auto &symbol : m_symbols) {
         for (int i = 0; i < symbol.probability(); ++i) {
@@ -196,9 +238,30 @@ void SlotReel::build_symbol_sequence() {
         }
     }
 
-    // Build random sequence
+    Symbol::Type lastType = Symbol::Type::Unknown;
+
     for (int i = 0; i < SEQUENCE_LENGTH; ++i) {
-        const int randomIndex = QRandomGenerator::global()->bounded(weightedSymbols.size());
-        m_symbol_sequence.append(weightedSymbols[randomIndex]);
+        // Create a filtered pool excluding the last symbol type
+        QVector<Symbol> availableSymbols;
+        if (lastType == Symbol::Type::Unknown) {
+            availableSymbols = weightedSymbols;
+        } else {
+            for (const auto &symbol : weightedSymbols) {
+                if (symbol.type() != lastType) {
+                    availableSymbols.append(symbol);
+                }
+            }
+        }
+
+        // Safety fallback (shouldn't happen with 5 different symbol types)
+        if (availableSymbols.isEmpty()) {
+            availableSymbols = weightedSymbols;
+        }
+
+        const int randomIndex = QRandomGenerator::global()->bounded(availableSymbols.size());
+        Symbol selectedSymbol = availableSymbols[randomIndex];
+
+        m_symbol_sequence.append(selectedSymbol);
+        lastType = selectedSymbol.type();
     }
 }

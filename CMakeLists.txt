@@ -11,13 +11,13 @@ set(QT_IMPORT_QML_PLUGINS OFF)
 # -----------------------------------------------------------------------------
 # Local macOS Qt installation path (for CLion code completion only)
 # -----------------------------------------------------------------------------
-if(APPLE)
+if (APPLE)
     list(APPEND CMAKE_PREFIX_PATH "/Users/LucaLeukert/Qt/6.9.2/macos/lib/cmake")
-endif()
+endif ()
 
-if(UNIX AND NOT APPLE)
+if (UNIX AND NOT APPLE)
     list(APPEND CMAKE_PREFIX_PATH "/usr/lib/aarch64-linux-gnu/cmake/")
-endif()
+endif ()
 
 # -----------------------------------------------------------------------------
 # Find and link required Qt modules
@@ -33,6 +33,12 @@ qt_add_executable(AllesSpitzeQt
         I2CWorker.h I2CWorker.cpp
         DebugLogger.h DebugLogger.cpp
         qml.qrc
+        Tower.cpp
+        Tower.h
+        SlotMachine.cpp
+        SlotMachine.h
+        ApplicationController.cpp
+        ApplicationController.h
 )
 
 qt_add_qml_module(AllesSpitzeQt
@@ -41,8 +47,12 @@ qt_add_qml_module(AllesSpitzeQt
         QML_FILES
         qml/main.qml
         qml/DebugPanel.qml
+        qml/TowerDebugPanel.qml
+        qml/I2CDebugPanel.qml
+        qml/BetPanel.qml
+        qml/CashoutPanel.qml
 )
 
 target_link_libraries(AllesSpitzeQt
-        PRIVATE Qt6::Core Qt6::Quick
+        PRIVATE Qt6::Core Qt6::Quick Qt6::Qml
 )

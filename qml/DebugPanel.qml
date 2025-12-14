@@ -29,6 +29,30 @@ Rectangle {
             
             Item { Layout.fillWidth: true }
             
+            // Balance display
+            Label {
+                text: "Balance: " + slotMachine.balance
+                color: "#00ff00"
+                font.bold: true
+                font.pixelSize: 14
+            }
+
+            Button {
+                text: "+100"
+                onClicked: slotMachine.addBalance(100)
+                background: Rectangle {
+                    color: parent.pressed ? "#006600" : "#008800"
+                    radius: 4
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: "white"
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
             Button {
                 text: "Clear"
                 onClicked: DebugLogger.clearLog()

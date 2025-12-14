@@ -5,7 +5,6 @@
 #include <QPropertyAnimation>
 #include <QTimer>
 #include <QRandomGenerator>
-#include <QVariantMap>
 #include <QVector>
 #include "Symbol.h"
 
@@ -14,6 +13,8 @@ class SlotReel : public QQuickPaintedItem {
     Q_PROPERTY(qreal rotation READ rotation WRITE set_rotation NOTIFY rotation_changed)
     Q_PROPERTY(qreal miss_probability READ miss_probability WRITE set_miss_probability NOTIFY miss_probability_changed)
     Q_PROPERTY(bool spinning READ spinning NOTIFY spinning_changed)
+    Q_PROPERTY(Symbol::Type currentSymbolType READ currentSymbolType NOTIFY currentSymbolTypeChanged)
+    Q_PROPERTY(bool isMiss READ isMiss NOTIFY isMissChanged)
 
 public:
     explicit SlotReel(QQuickItem *parent = nullptr);
@@ -23,6 +24,12 @@ public:
     [[nodiscard]] qreal rotation() const { return m_rotation; }
     [[nodiscard]] bool spinning() const { return m_spinning; }
     [[nodiscard]] qreal miss_probability() const { return m_miss_probability; }
+
+    [[nodiscard]] Symbol::Type currentSymbolType() const {
+        return m_current_symbol_type;
+    }
+
+    [[nodiscard]] bool isMiss() const { return m_is_miss; }
 
     void set_rotation(qreal rotation);
 
@@ -39,6 +46,10 @@ signals:
 
     void miss_probability_changed();
 
+    void currentSymbolTypeChanged();
+
+    void isMissChanged();
+
 private slots:
     void on_spin_finished();
 
@@ -47,6 +58,8 @@ private:
 
     void build_symbol_sequence();
 
+    void updateCurrentSymbol();
+
     [[nodiscard]] qreal symbol_height() const { return height(); }
 
     bool m_spinning;
@@ -54,6 +67,8 @@ private:
     qreal m_miss_probability;
     qreal m_current_miss_offset;
     qreal m_target_miss_offset;
+    Symbol::Type m_current_symbol_type = Symbol::Type::Unknown;
+    bool m_is_miss = false;
 
     QPropertyAnimation *m_spin_animation;
     QVector<Symbol> m_symbols;
