@@ -12,6 +12,23 @@ ApplicationWindow {
     title: "Slot Machine with Towers"
     color: "black"
 
+    // Power Off Overlay - blocks everything when powered off
+    Rectangle {
+        id: powerOffOverlay
+        anchors.fill: parent
+        color: "black"
+        visible: !appController.poweredOn
+        z: 1000  // On top of everything
+
+        Text {
+            anchors.centerIn: parent
+            text: "POWERED OFF"
+            font.pixelSize: 48
+            font.bold: true
+            color: "#333"
+        }
+    }
+
     // Reel in the center of the screen
     SlotReel {
         id: reel
@@ -19,7 +36,7 @@ ApplicationWindow {
         anchors.centerIn: parent
         width: 600
         height: 1080
-        visible: !slotMachine.riskModeActive
+        visible: !slotMachine.riskModeActive && appController.poweredOn
 
         Component.onCompleted: {
             DebugLogger.log("SlotReel initialized h");
@@ -35,7 +52,7 @@ ApplicationWindow {
         anchors.centerIn: parent
         width: 450
         height: 700
-        visible: slotMachine.riskModeActive
+        visible: slotMachine.riskModeActive && appController.poweredOn
 
         active: slotMachine.riskModeActive
         currentPrize: slotMachine.riskPrize
@@ -56,7 +73,7 @@ ApplicationWindow {
         anchors.margins: 20
         width: 280
         height: 420
-        visible: !slotMachine.riskModeActive
+        visible: !slotMachine.riskModeActive && appController.poweredOn
 
         currentBet: slotMachine.bet
         balance: slotMachine.balance
@@ -79,7 +96,7 @@ ApplicationWindow {
         anchors.margins: 20
         width: 300
         height: 420
-        visible: !slotMachine.riskModeActive
+        visible: !slotMachine.riskModeActive && appController.poweredOn
 
         currentPrize: slotMachine.currentPrize
         towerPrizes: slotMachine.towerPrizes
@@ -100,7 +117,7 @@ ApplicationWindow {
         radius: 10
         border.color: "#FFD700"
         border.width: 2
-        visible: slotMachine.riskModeActive
+        visible: slotMachine.riskModeActive && appController.poweredOn
 
         Column {
             anchors.centerIn: parent

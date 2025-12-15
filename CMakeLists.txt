@@ -27,7 +27,12 @@ endif ()
 # -----------------------------------------------------------------------------
 # Find and link required Qt modules
 # -----------------------------------------------------------------------------
-find_package(Qt6 REQUIRED COMPONENTS Core Quick)
+# SerialPort is only needed on Linux (Raspberry Pi)
+if (UNIX AND NOT APPLE)
+    find_package(Qt6 REQUIRED COMPONENTS Core Quick SerialPort)
+else()
+    find_package(Qt6 REQUIRED COMPONENTS Core Quick)
+endif()
 
 qt_policy(SET QTP0001 NEW)
 
@@ -36,6 +41,7 @@ qt_add_executable(AllesSpitzeQt
         SlotReel.h SlotReel.cpp
         Symbol.h Symbol.cpp
         I2CWorker.h I2CWorker.cpp
+        SerialWorker.h SerialWorker.cpp
         DebugLogger.h DebugLogger.cpp
         qml.qrc
         Tower.cpp
@@ -59,6 +65,13 @@ qt_add_qml_module(AllesSpitzeQt
         qml/RiskLadder.qml
 )
 
-target_link_libraries(AllesSpitzeQt
-        PRIVATE Qt6::Core Qt6::Quick Qt6::Qml
-)
+# Link libraries - conditionally link SerialPort only on Linux
+if (UNIX AND NOT APPLE)
+    target_link_libraries(AllesSpitzeQt
+            PRIVATE Qt6::Core Qt6::Quick Qt6::Qml Qt6::SerialPort
+    )
+else()
+    target_link_libraries(AllesSpitzeQt
+            PRIVATE Qt6::Core Qt6::Quick Qt6::Qml
+    )
+endif()
