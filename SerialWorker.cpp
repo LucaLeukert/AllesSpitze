@@ -6,10 +6,8 @@
 
 SerialWorker::SerialWorker(QObject *parent)
     : QObject(parent)
-#ifdef Q_OS_LINUX
-      , m_serial_port(new QSerialPort(this))
-#endif
 {
+    // Don't create QSerialPort here - do it in initialize() after moveToThread()
 }
 
 SerialWorker::~SerialWorker() {
@@ -19,7 +17,10 @@ SerialWorker::~SerialWorker() {
 void SerialWorker::initialize() {
     DebugLogger::instance().info("SerialWorker initialized on thread: " +
                                  QString::number(reinterpret_cast<quint64>(QThread::currentThreadId())));
-#ifndef Q_OS_LINUX
+#ifdef Q_OS_LINUX
+    // Create QSerialPort in the correct thread
+    m_serial_port = new QSerialPort(this);
+#else
     DebugLogger::instance().warning("SerialWorker: Serial port support is disabled on this platform (macOS)");
 #endif
 }
@@ -37,6 +38,8 @@ QString SerialWorker::findSerialPort() {
         const QString portName = port.portName();
         const QString description = port.description().toLower();
         const QString manufacturer = port.manufacturer().toLower();
+
+        DebugLogger::instance().info(portName);
 
         // Common USB serial adapter patterns
         if (portName.contains("ttyUSB") ||      // Linux USB serial
@@ -68,6 +71,7 @@ QString SerialWorker::findSerialPort() {
 }
 
 void SerialWorker::openPort(const QString &portName) {
+    DebugLogger::instance().info("Opening serial port " + portName);
 #ifdef Q_OS_LINUX
     if (m_is_open) {
         DebugLogger::instance().warning("Serial port already open");

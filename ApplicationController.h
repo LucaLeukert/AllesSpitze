@@ -27,7 +27,7 @@ public:
 
     // Power control
     Q_INVOKABLE void setPowerOn(bool on);
-    [[nodiscard]] bool poweredOn() const { return m_powered_on; }
+    [[nodiscard]] bool poweredOn() const { return true; }
 
 signals:
     // Signal to forward response to QML
