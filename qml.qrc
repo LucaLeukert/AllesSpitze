@@ -10,5 +10,8 @@
         <file>images/marienkaefer.png</file>
         <file>images/sonne.png</file>
         <file>images/teufel.png</file>
+        <file>images/background_texture.png</file>
+        <file>images/riskladder_idle.png</file>
+        <file>images/riskladder_highlight.png</file>
     </qresource>
 </RCC>

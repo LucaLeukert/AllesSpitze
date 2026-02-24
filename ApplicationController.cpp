@@ -493,7 +493,7 @@ void ApplicationController::handleSerialCommand(SerialWorker::Command cmd, const
 
                 // Find the reel in QML and update probabilities
                 if (m_engine && !m_engine->rootObjects().isEmpty()) {
-                    QObject *root = m_engine->rootObjects().first();
+                    const QObject *root = m_engine->rootObjects().first();
                     QObject *reel = root->findChild<QObject*>("mainReel");
                     if (reel) {
                         QMetaObject::invokeMethod(reel, "set_probabilities",
@@ -518,7 +518,7 @@ void ApplicationController::handleSerialCommand(SerialWorker::Command cmd, const
 }
 
 void ApplicationController::sendSerialStatus() const {
-    QString status = QString(
+    const QString status = QString(
         "=== AllesSpitze Status ===\n"
         "Power: %1\n"
         "Balance: %2\n"

@@ -27,7 +27,7 @@ public:
 
     // Power control
     Q_INVOKABLE void setPowerOn(bool on);
-    [[nodiscard]] bool poweredOn() const { return true; }
+    [[nodiscard]] bool poweredOn() const { return m_powered_on; }
 
 signals:
     // Signal to forward response to QML
@@ -75,6 +75,6 @@ private:
     QScopedPointer<SlotMachine> m_slotMachine;
     QScopedPointer<QTimer> m_healthcheckTimer;
     int m_consecutiveFailures{0};
-    bool m_powered_on{true};  // Default to powered on
+    bool m_powered_on{true};
     static constexpr int MAX_CONSECUTIVE_FAILURES = 3;
 };

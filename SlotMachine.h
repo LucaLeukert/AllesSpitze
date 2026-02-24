@@ -20,6 +20,7 @@ class SlotMachine : public QObject {
     Q_PROPERTY(double bet READ bet WRITE setBet NOTIFY betChanged)
     Q_PROPERTY(double currentPrize READ currentPrize NOTIFY currentPrizeChanged)
     Q_PROPERTY(QVariantList towerPrizes READ towerPrizes NOTIFY currentPrizeChanged)
+    Q_PROPERTY(double acceptedPrize READ acceptedPrize NOTIFY acceptedPrizeChanged)
     Q_PROPERTY(bool sessionActive READ sessionActive NOTIFY sessionActiveChanged)
     Q_PROPERTY(bool canChangeBet READ canChangeBet NOTIFY canChangeBetChanged)
 
@@ -30,6 +31,8 @@ class SlotMachine : public QObject {
     Q_PROPERTY(QVariantList riskLadderSteps READ riskLadderSteps CONSTANT)
     Q_PROPERTY(bool riskAnimating READ riskAnimating NOTIFY riskAnimatingChanged)
     Q_PROPERTY(int riskAnimationPosition READ riskAnimationPosition NOTIFY riskAnimationPositionChanged)
+    Q_PROPERTY(bool riskAusspielungStarted READ riskAusspielungStarted NOTIFY riskAusspielungStartedChanged)
+    Q_PROPERTY(double riskBasePrize READ riskBasePrize NOTIFY riskPrizeChanged)
 
 public:
     explicit SlotMachine(QObject *parent = nullptr);
@@ -42,6 +45,7 @@ public:
     [[nodiscard]] double bet() const { return m_bet; }
     [[nodiscard]] double currentPrize() const;
     [[nodiscard]] QVariantList towerPrizes() const;
+    [[nodiscard]] double acceptedPrize() const { return m_accepted_prize; }
     [[nodiscard]] bool sessionActive() const { return m_session_active; }
     [[nodiscard]] bool canChangeBet() const { return !m_session_active && !m_risk_mode_active; }
     [[nodiscard]] bool isSpinning() const { return m_reel && m_reel->spinning(); }
@@ -53,6 +57,8 @@ public:
     [[nodiscard]] QVariantList riskLadderSteps() const;
     [[nodiscard]] bool riskAnimating() const { return m_risk_animating; }
     [[nodiscard]] int riskAnimationPosition() const { return m_risk_animation_position; }
+    [[nodiscard]] bool riskAusspielungStarted() const { return m_ausspielung_started; }
+    [[nodiscard]] double riskBasePrize() const { return m_risk_base_prize; }
 
     Q_INVOKABLE void spin();
     Q_INVOKABLE void resetAllTowers();
@@ -62,6 +68,8 @@ public:
     Q_INVOKABLE void increaseBet();
     Q_INVOKABLE void decreaseBet();
     Q_INVOKABLE void cashout();
+    Q_INVOKABLE void acceptPrize();       // Accept current prize (hold for Leiter or payout)
+    Q_INVOKABLE void payoutAccepted();    // Pay out the accepted prize to balance
     [[nodiscard]] Q_INVOKABLE double getPrizeForTower(int towerId) const;
     [[nodiscard]] Q_INVOKABLE double getMultiplierForTower(int towerId, int level) const;
 
@@ -69,6 +77,7 @@ public:
     Q_INVOKABLE void startRiskMode();
     Q_INVOKABLE void riskHigher();      // Try to go higher on ladder
     Q_INVOKABLE void collectRiskPrize(); // Take current risk prize
+    Q_INVOKABLE void collectRiskOneToOnePrize(); // Debug: take entry prize (1:1)
 
     void setBalance(double balance);
     void setI2CWorker(I2CWorker *worker) { m_i2c_worker = worker; }
@@ -84,6 +93,7 @@ signals:
     void balanceChanged();
     void betChanged();
     void currentPrizeChanged();
+    void acceptedPrizeChanged();
     void sessionActiveChanged();
     void canChangeBetChanged();
     void spinComplete(const QString &result);
@@ -96,6 +106,7 @@ signals:
     void riskLevelChanged();
     void riskAnimatingChanged();
     void riskAnimationPositionChanged();
+    void riskAusspielungStartedChanged();
     void riskWon(double newPrize);
     void riskLost();
     void riskCollected(double amount);
@@ -116,10 +127,10 @@ private:
     inline static constexpr double KLEEBLATT_MULTIPLIERS[6] = {0, 3, 8, 16, 29, 50};
     inline static constexpr double COIN_MULTIPLIERS[6] = {0, 10, 40, 100, 200, 350};
 
-    // Risk ladder multipliers (each step doubles)
-    inline static constexpr int RISK_LADDER_STEPS = 8;
-    inline static constexpr int RISK_CHECKPOINT_LEVEL = 5; // "Ausspielung" checkpoint
-    inline static constexpr double RISK_MULTIPLIERS[RISK_LADDER_STEPS] = {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0};
+    // Risk ladder levels (0 = 1:1 entry), checkpoint in the middle ("Ausspielung")
+    inline static constexpr int RISK_LADDER_STEPS = 11;
+    inline static constexpr int RISK_CHECKPOINT_LEVEL = 5;
+    inline static constexpr double RISK_MULTIPLIERS[RISK_LADDER_STEPS] = {1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 40.0};
 
     QVector<Tower*> m_towers;
     QPointer<SlotReel> m_reel;
@@ -129,6 +140,7 @@ private:
     QString m_last_result;
     double m_balance = 0.0;
     double m_bet = 1.0;
+    double m_accepted_prize = 0.0;    // Prize held after "Annahme", before Leiter or payout
 
     // Risk ladder state
     bool m_risk_mode_active = false;
@@ -138,6 +150,13 @@ private:
     bool m_risk_animating = false;
     int m_risk_animation_position = 0;
     int m_risk_target_position = 0;
+    int m_risk_lose_position = 0;
+    int m_risk_win_position = 0;
+    int m_risk_blink_steps = 0;
+    bool m_risk_showing_win = false;
+    int m_risk_animation_mode = 0; // 0=none, 1=ausspielung scan
+    int m_risk_scan_position = 0;
+    bool m_ausspielung_started = false;
     QTimer *m_risk_animation_timer = nullptr;
     std::mt19937 m_rng;
 

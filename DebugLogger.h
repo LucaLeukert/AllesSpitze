@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QFile>
+#include <QMutex>
 
 class DebugLogger : public QObject {
     Q_OBJECT
@@ -59,6 +60,7 @@ private:
     QString m_log_text;
     QFile m_logFile;
     LogVerbosity m_verbosity = LogVerbosity::Normal;
+    mutable QMutex m_mutex;
 
     void openLogFile();
     void writeToLogFile(const QString& message);

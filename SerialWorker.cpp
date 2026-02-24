@@ -210,8 +210,8 @@ void SerialWorker::processCommand(const QString &line) {
         }
 
         // Reconstruct JSON from remaining parts
-        QString jsonStr = line.mid(cmd.length()).trimmed();
-        QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
+        const QString jsonStr = line.mid(cmd.length()).trimmed();
+        const QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8());
 
         if (!doc.isObject()) {
             sendResponse("ERROR: Invalid JSON format\n");

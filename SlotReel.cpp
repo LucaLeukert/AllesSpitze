@@ -135,7 +135,15 @@ void SlotReel::spin() {
     const int symbolsToSpin = 3 + QRandomGenerator::global()->bounded(3);
     const qreal spinDistance = symbolsToSpin * currentSymbolHeight + (m_target_miss_offset * currentSymbolHeight);
 
-    const qreal targetRotation = m_rotation + spinDistance;
+    const qreal targetRotation = m_rotation - spinDistance;
+
+    const int minSymbols = 3;
+    const int maxSymbols = 5;
+    const int minDurationMs = 1000;
+    const int maxDurationMs = 1500;
+    const qreal durationFactor = (symbolsToSpin - minSymbols) / static_cast<qreal>(maxSymbols - minSymbols);
+    const int durationMs = qRound(minDurationMs + durationFactor * (maxDurationMs - minDurationMs));
+    m_spin_animation->setDuration(durationMs);
 
     m_spin_animation->setStartValue(m_rotation);
     m_spin_animation->setEndValue(targetRotation);
@@ -168,7 +176,7 @@ void SlotReel::set_probabilities(const QVariantMap &probabilities) {
 
     m_symbols.clear();
     for (const auto &config : configs) {
-        int prob = probabilities.contains(config.key)
+        const int prob = probabilities.contains(config.key)
             ? probabilities[config.key].toInt()
             : 20;
         if (prob > 0) {

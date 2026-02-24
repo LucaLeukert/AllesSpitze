@@ -2,290 +2,300 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 
-Rectangle {
+Item {
     id: riskLadder
-    color: "#1a1a1a"
-    radius: 15
-    border.color: "#FF6600"
-    border.width: 3
 
     property bool active: false
     property double currentPrize: 0.0
     property double basePrize: 0.0
     property int currentLevel: 0
+    property bool ausspielungStarted: false
     property bool animating: false
     property int animationPosition: 0
-
-    // Checkpoint level (Ausspielung)
-    readonly property int checkpointLevel: 5
-
-    // Ladder multipliers
-    readonly property var ladderMultipliers: [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0]
+    property bool debugControls: false
+    property int idleAnimationPosition: -1
+    readonly property bool ausspielungLoopActive: animating && !ausspielungStarted && currentLevel === 5 && animationPosition > 5
 
     signal riskHigher()
     signal collectPrize()
+    signal collectOneToOnePrize()
 
-    // Background gradient
-    Rectangle {
-        anchors.fill: parent
-        radius: parent.radius
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: "#2a1a0a" }
-            GradientStop { position: 1.0; color: "#1a1a1a" }
+    readonly property var ladderRows: [
+        { level: 10, isCheckpoint: false },
+        { level: 9, isCheckpoint: false },
+        { level: 8, isCheckpoint: false },
+        { level: 7, isCheckpoint: false },
+        { level: 6, isCheckpoint: false },
+        { level: 5, isCheckpoint: true },
+        { level: 4, isCheckpoint: false },
+        { level: 3, isCheckpoint: false },
+        { level: 2, isCheckpoint: false },
+        { level: 1, isCheckpoint: false },
+        { level: -1, isCheckpoint: false }
+    ]
+
+    readonly property var levelMultipliers: ({
+        "1": 1.5,
+        "2": 2.0,
+        "3": 3.0,
+        "4": 4.0,
+        "5": 6.0,
+        "6": 8.0,
+        "7": 12.0,
+        "8": 16.0,
+        "9": 24.0,
+        "10": 40.0
+    })
+
+    function scrollToLevel(level) {
+        var row = ladderLevelToRow(level)
+        if (row < 0 || !ladderView.width || !ladderView.height) return
+
+        var top = 0
+        for (var i = 0; i < row; ++i) {
+            top += rowHeightForIndex(i) + ladderView.spacing
+        }
+
+        var rowCenter = top + rowHeightForIndex(row) / 2
+        var target = rowCenter - (ladderView.height / 2)
+        var maxY = Math.max(0, ladderView.contentHeight - ladderView.height)
+        ladderView.contentY = Math.max(0, Math.min(target, maxY))
+    }
+
+    function idleLoseLevel() {
+        if (currentLevel > 5) return currentLevel - 1
+        if (currentLevel === 5 && ausspielungStarted) return 4
+        return -1
+    }
+
+    function idleWinLevel() {
+        return Math.min(currentLevel + 1, 10)
+    }
+
+    onCurrentLevelChanged: scrollToLevel(currentLevel)
+    onActiveChanged: if (active) scrollToLevel(currentLevel)
+
+    Component.onCompleted: Qt.callLater(function() { scrollToLevel(currentLevel) })
+
+    function rowWidthForIndex(i) {
+        var t = i / Math.max(1, ladderRows.length - 1)
+        return ladderView.width * (1.0 - (0.38 * t))
+    }
+
+    function rowHeightForIndex(i) {
+        return Math.round(rowWidthForIndex(i) * 60 / 176)
+    }
+
+    function ladderLevelToRow(level) {
+        if (level === 0) level = 1
+        for (var i = 0; i < ladderRows.length; ++i) {
+            if (ladderRows[i].level === level) return i
+        }
+        return -1
+    }
+
+    function rowHighlighted(row) {
+        var rowLevel = ladderRows[row].level
+        if (animating) return rowLevel === animationPosition
+        if (idleBlinkTimer.running) return rowLevel === idleAnimationPosition
+        if (currentLevel < 0) return rowLevel === -1
+        return rowLevel === currentLevel
+    }
+
+    function payoutForLevel(level) {
+        if (level < 0) return 0
+        var mult = levelMultipliers[level.toString()]
+        if (mult === undefined) return 0
+        return basePrize * mult
+    }
+
+    function formatPayout(value) {
+        return Number(value).toFixed(2)
+    }
+
+    function rowLabel(modelData) {
+        if (modelData.level === -1) return formatPayout(0)
+        if (modelData.isCheckpoint) return "AUSSPIELUNG\n" + formatPayout(payoutForLevel(modelData.level))
+        return formatPayout(payoutForLevel(modelData.level))
+    }
+
+    Timer {
+        id: idleBlinkTimer
+        interval: 220
+        repeat: true
+        running: active && !animating && currentPrize > 0 && currentLevel >= 0
+        onRunningChanged: {
+            if (running) {
+                idleAnimationPosition = idleLoseLevel()
+            } else {
+                idleAnimationPosition = -99
+            }
+        }
+        onTriggered: {
+            var loseLevel = idleLoseLevel()
+            var winLevel = idleWinLevel()
+            idleAnimationPosition = (idleAnimationPosition === loseLevel) ? winLevel : loseLevel
         }
     }
 
-    ColumnLayout {
+    Item {
         anchors.fill: parent
-        anchors.margins: 15
-        spacing: 8
 
-        // Title
-        Text {
-            Layout.alignment: Qt.AlignHCenter
-            text: "🎲 RISIKOLEITER"
-            font.pixelSize: 28
-            font.bold: true
-            color: "#FF6600"
-        }
+        ListView {
+            id: ladderView
+            anchors.left: parent.left
+            anchors.leftMargin: 24
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.topMargin: 0
+            anchors.bottomMargin: 0
+            width: Math.min(parent.width * 0.60, 300)
+            clip: true
+            interactive: false
+            spacing: 4
+            model: ladderRows
+            onHeightChanged: Qt.callLater(function() { scrollToLevel(currentLevel) })
+            onWidthChanged: Qt.callLater(function() { scrollToLevel(currentLevel) })
 
-        // Current prize display
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 60
-            color: "#2a2a1a"
-            radius: 10
-            border.color: "#FFD700"
-            border.width: 2
-
-            Column {
-                anchors.centerIn: parent
-                spacing: 2
-
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: "AKTUELLER GEWINN"
-                    font.pixelSize: 12
-                    color: "#888"
-                }
-
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: currentPrize.toFixed(2) + " €"
-                    font.pixelSize: 32
-                    font.bold: true
-                    color: "#FFD700"
+            Behavior on contentY {
+                NumberAnimation {
+                    duration: 520
+                    easing.type: Easing.InOutQuad
                 }
             }
-        }
 
-        // Ladder visualization
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            color: "#0a0a0a"
-            radius: 8
-            border.color: "#333"
+            delegate: Item {
+                readonly property real t: index / Math.max(1, ladderRows.length - 1)
+                width: rowWidthForIndex(index)
+                height: rowHeightForIndex(index)
+                anchors.horizontalCenter: parent ? parent.horizontalCenter : undefined
 
-            ListView {
-                id: ladderView
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 4
-                clip: true
-                verticalLayoutDirection: ListView.BottomToTop
-
-                model: ladderMultipliers.length
-
-                delegate: Rectangle {
-                    width: ladderView.width
-                    height: 45
-                    radius: 6
-
-                    property int stepLevel: index
-                    property bool isCurrentLevel: stepLevel === currentLevel && !animating
-                    property bool isAnimationPosition: stepLevel === animationPosition && animating
-                    property bool isCheckpoint: stepLevel === checkpointLevel
-                    property double stepPrize: basePrize * ladderMultipliers[stepLevel]
-
-                    color: {
-                        if (isAnimationPosition) return "#FF6600"
-                        if (isCurrentLevel) return "#4CAF50"
-                        if (isCheckpoint) return "#1a2a3a" // Special checkpoint color
-                        if (stepLevel < currentLevel) return "#2a3a2a"
-                        return "#1a1a1a"
-                    }
-
-                    border.color: {
-                        if (isAnimationPosition) return "#FFAA00"
-                        if (isCurrentLevel) return "#66BB6A"
-                        if (isCheckpoint) return "#4488FF" // Blue border for checkpoint
-                        return "#333"
-                    }
-                    border.width: (isCurrentLevel || isAnimationPosition || isCheckpoint) ? 3 : 1
-
-                    // Pulsing animation for current position
-                    SequentialAnimation on opacity {
-                        running: isAnimationPosition
-                        loops: Animation.Infinite
-                        NumberAnimation { to: 0.6; duration: 100 }
-                        NumberAnimation { to: 1.0; duration: 100 }
-                    }
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 8
-                        spacing: 10
-
-                        // Level indicator
-                        Rectangle {
-                            Layout.preferredWidth: 35
-                            Layout.preferredHeight: 35
-                            radius: 17
-                            color: {
-                                if (isCheckpoint) return "#4488FF"
-                                if (stepLevel < currentLevel) return "#4CAF50"
-                                return "#444"
-                            }
-
-                            Text {
-                                anchors.centerIn: parent
-                                text: isCheckpoint ? "▶" : (stepLevel + 1).toString()
-                                font.pixelSize: 16
-                                font.bold: true
-                                color: "white"
-                            }
-                        }
-
-                        // Multiplier or Ausspielung label
-                        Text {
-                            Layout.fillWidth: true
-                            text: isCheckpoint ? "AUSSPIELUNG" : ("×" + ladderMultipliers[stepLevel].toFixed(0))
-                            font.pixelSize: isCheckpoint ? 14 : 18
-                            font.bold: true
-                            color: {
-                                if (isCheckpoint) return "#4488FF"
-                                if (isCurrentLevel) return "#FFD700"
-                                return "#AAA"
-                            }
-                        }
-
-                        // Prize at this level
-                        Text {
-                            text: stepPrize.toFixed(2) + "€"
-                            font.pixelSize: 18
-                            font.bold: true
-                            color: {
-                                if (isCurrentLevel) return "#FFD700"
-                                if (isCheckpoint) return "#4488FF"
-                                if (stepLevel < currentLevel) return "#4CAF50"
-                                return "#666"
-                            }
-                        }
-                    }
+                Image {
+                    anchors.fill: parent
+                    fillMode: Image.PreserveAspectFit
+                    source: rowHighlighted(index)
+                            ? "qrc:/images/riskladder_highlight.png"
+                            : "qrc:/images/riskladder_idle.png"
+                    smooth: true
                 }
-            }
-        }
 
-        // Checkpoint info text
-        Text {
-            Layout.alignment: Qt.AlignHCenter
-            text: currentLevel > checkpointLevel ?
-                  "📍 Checkpoint aktiv - Bei Verlust zurück zu AUSSPIELUNG" :
-                  "⬆️ Erreiche AUSSPIELUNG für Sicherheit!"
-            font.pixelSize: 11
-            color: currentLevel > checkpointLevel ? "#4488FF" : "#888"
-        }
-
-        // Action buttons
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 10
-
-            // Collect button
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 60
-                color: collectArea.pressed ? "#2E7D32" : "#4CAF50"
-                radius: 10
-                opacity: animating ? 0.5 : 1.0
-
-                Column {
+                Text {
                     anchors.centerIn: parent
-                    spacing: 2
+                    text: rowLabel(modelData)
+                    color: rowHighlighted(index) ? "#1b1b1b" : (modelData.isCheckpoint ? "#1b1b1b" : "#ffffff")
+                    font.pixelSize: modelData.isCheckpoint ? 17 : 20
+                    font.bold: true
+                    font.family: "Impact"
+                    horizontalAlignment: Text.AlignHCenter
+                }
+            }
+        }
 
-                    Text {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: "💰 AUSZAHLEN"
-                        font.pixelSize: 16
-                        font.bold: true
-                        color: "white"
-                    }
+        Rectangle {
+            width: 6
+            radius: 3
+            color: "#55ffffff"
+            anchors.top: ladderView.top
+            anchors.bottom: ladderView.bottom
+            anchors.left: ladderView.left
+            anchors.leftMargin: 8
+            z: -1
+        }
 
-                    Text {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: currentPrize.toFixed(2) + "€"
-                        font.pixelSize: 14
-                        color: "#C8E6C9"
-                    }
+        Rectangle {
+            width: 6
+            radius: 3
+            color: "#55ffffff"
+            anchors.top: ladderView.top
+            anchors.bottom: ladderView.bottom
+            anchors.right: ladderView.right
+            anchors.rightMargin: 8
+            z: -1
+        }
+
+        Column {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.rightMargin: 8
+            spacing: 16
+
+            Rectangle {
+                width: 88
+                height: 88
+                radius: 44
+                color: "#22000000"
+                border.color: "#d7d7d7"
+                border.width: 2
+                opacity: animating ? 0.6 : 1.0
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "$"
+                    color: "#ffffff"
+                    font.pixelSize: 44
+                    font.bold: true
                 }
 
                 MouseArea {
-                    id: collectArea
                     anchors.fill: parent
-                    enabled: !animating
+                    enabled: !animating && active
                     onClicked: riskLadder.collectPrize()
                 }
             }
 
-            // Risk higher button
             Rectangle {
-                Layout.fillWidth: true
-                Layout.preferredHeight: 60
-                color: {
-                    if (currentLevel >= 7) return "#444"
-                    return riskArea.pressed ? "#CC5500" : "#FF6600"
-                }
-                radius: 10
-                opacity: animating ? 0.5 : 1.0
+                width: 88
+                height: 88
+                radius: 44
+                color: "#22000000"
+                border.color: "#d7d7d7"
+                border.width: 2
+                opacity: animating ? 0.6 : 1.0
 
-                Column {
+                Text {
                     anchors.centerIn: parent
-                    spacing: 2
-
-                    Text {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: currentLevel >= 7 ? "🏆 MAX" : "⬆️ HÖHER"
-                        font.pixelSize: 16
-                        font.bold: true
-                        color: "white"
-                    }
-
-                    Text {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: currentLevel >= 7 ? "Ausgezahlt!" : (basePrize * ladderMultipliers[Math.min(currentLevel + 1, 7)]).toFixed(2) + "€"
-                        font.pixelSize: 14
-                        color: "#FFE0B2"
-                    }
+                    text: "1:1"
+                    color: "#ffffff"
+                    font.pixelSize: 28
+                    font.bold: true
                 }
 
                 MouseArea {
-                    id: riskArea
                     anchors.fill: parent
-                    enabled: !animating && currentLevel < 7
+                    enabled: active && currentPrize > 0 && (!animating || ausspielungLoopActive)
                     onClicked: riskLadder.riskHigher()
                 }
             }
         }
 
-        // Warning text
-        Text {
-            Layout.alignment: Qt.AlignHCenter
-            text: currentLevel <= checkpointLevel ?
-                  "⚠️ Bei Verlust ist der gesamte Gewinn weg!" :
-                  "⚠️ Bei Verlust zurück zu AUSSPIELUNG!"
-            font.pixelSize: 12
-            color: "#FF6666"
+        Rectangle {
+            visible: debugControls
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 8
+            radius: 8
+            color: "#99000000"
+            border.color: "#808080"
+            border.width: 1
+            width: debugRow.implicitWidth + 18
+            height: debugRow.implicitHeight + 12
+
+            Row {
+                id: debugRow
+                anchors.centerIn: parent
+                spacing: 8
+
+                Button {
+                    text: "1:1"
+                    enabled: active && currentPrize > 0 && (!animating || ausspielungLoopActive)
+                    onClicked: riskLadder.riskHigher()
+                }
+                Button {
+                    text: "$"
+                    enabled: active && !animating
+                    onClicked: riskLadder.collectPrize()
+                }
+            }
         }
     }
 }

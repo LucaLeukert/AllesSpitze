@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QDebug>
 #include <QColor>
+#include <QMutexLocker>
 
 DebugLogger& DebugLogger::instance() {
     static DebugLogger instance;
@@ -24,7 +25,7 @@ void DebugLogger::setVerbosity(LogVerbosity verbosity) {
     if (m_verbosity != verbosity) {
         m_verbosity = verbosity;
 
-        QString msg = QString("Logging verbosity changed to: %1")
+        const QString msg = QString("Logging verbosity changed to: %1")
             .arg(verbosity == LogVerbosity::Verbose ? "VERBOSE" : "NORMAL");
         info(msg);
 
@@ -33,21 +34,21 @@ void DebugLogger::setVerbosity(LogVerbosity verbosity) {
 }
 
 void DebugLogger::openLogFile() {
-    QString logDir = QStandardPaths::writableLocation(
+    const QString logDir = QStandardPaths::writableLocation(
         QStandardPaths::AppDataLocation
     );
 
     QDir().mkpath(logDir);
 
-    QString timestamp = QDateTime::currentDateTime()
+    const QString timestamp = QDateTime::currentDateTime()
         .toString("yyyy-MM-dd_HH-mm-ss");
-    QString logFileName = QString("%1/debug_%2.log")
+    const QString logFileName = QString("%1/debug_%2.log")
         .arg(logDir)
         .arg(timestamp);
 
     m_logFile.setFileName(logFileName);
     if (m_logFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QString openMsg = QString("Log file opened: %1").arg(logFileName);
+        const QString openMsg = QString("Log file opened: %1").arg(logFileName);
         logMessage(openMsg, LogLevel::Debug);
         qDebug() << openMsg;
     } else {
@@ -57,9 +58,9 @@ void DebugLogger::openLogFile() {
 
 void DebugLogger::writeToLogFile(const QString& message) {
     if (m_logFile.isOpen()) {
-        QString timestamp = QDateTime::currentDateTime()
+        const QString timestamp = QDateTime::currentDateTime()
             .toString("yyyy-MM-dd HH:mm:ss.zzz");
-        QString logEntry = QString("[%1] %2\n")
+        const QString logEntry = QString("[%1] %2\n")
             .arg(timestamp)
             .arg(message);
         m_logFile.write(logEntry.toUtf8());
@@ -87,25 +88,28 @@ void DebugLogger::logMessage(const QString& message, LogLevel level,
         return; // Skip this message
     }
 
-    QString timestamp = QDateTime::currentDateTime()
+    const QString timestamp = QDateTime::currentDateTime()
         .toString("HH:mm:ss.zzz");
-    QString levelStr = levelToString(level);
+    const QString levelStr = levelToString(level);
 
-    QString formattedMessage = QString("[%1] [%2] %3")
+    const QString formattedMessage = QString("[%1] [%2] %3")
         .arg(timestamp)
         .arg(levelStr)
         .arg(message);
 
-    // Add to in-memory log
-    m_log_text += formattedMessage + "\n";
+    {
+        QMutexLocker locker(&m_mutex);
+        // Add to in-memory log
+        m_log_text += formattedMessage + "\n";
 
-    // Keep only last 10000 characters in memory
-    if (m_log_text.length() > 10000) {
-        m_log_text = m_log_text.right(10000);
+        // Keep only last 10000 characters in memory
+        if (m_log_text.length() > 10000) {
+            m_log_text = m_log_text.right(10000);
+        }
+
+        // Write to file (always write everything to file)
+        writeToLogFile(formattedMessage);
     }
-
-    // Write to file (always write everything to file)
-    writeToLogFile(formattedMessage);
 
     emit logTextChanged();
 

@@ -1,30 +1,35 @@
 #include "I2CWorker.h"
-#include <cerrno>
-#include <cstring>
-#include <fcntl.h>
+
 #include <QDebug>
-#include <unistd.h>
-#include <linux/i2c-dev.h>
-#include <sys/ioctl.h>
+#include <QThread>
+#include <QTimer>
+#include <QMutexLocker>
+#include <QChar>
+
 #include "DebugLogger.h"
 
-I2CWorker::I2CWorker(QObject *parent) : QObject(parent) {
-}
+#ifdef Q_OS_LINUX
+  #include <cerrno>
+  #include <cstring>
+  #include <fcntl.h>
+  #include <unistd.h>
+  #include <sys/ioctl.h>
+  #include <linux/i2c-dev.h>
+#endif
+
+I2CWorker::I2CWorker(QObject *parent) : QObject(parent) {}
 
 I2CWorker::~I2CWorker() {
     cleanup();
 }
 
 void I2CWorker::initialize() {
-    if (m_is_initialized) {
-        return;
-    }
+    if (m_is_initialized) return;
 
     qDebug() << "I2C Thread ID:" << QThread::currentThreadId();
     DebugLogger::instance().info(
-        QString("I2C Worker initialized on thread: %1 (using Linux I2C + "
-            "Protocol)")
-        .arg(reinterpret_cast<qulonglong>(QThread::currentThreadId()))
+        QString("I2C Worker initialized on thread: %1 (using Linux I2C + Protocol)")
+            .arg(reinterpret_cast<qulonglong>(QThread::currentThreadId()))
     );
 
     m_is_initialized = true;
@@ -32,26 +37,39 @@ void I2CWorker::initialize() {
 }
 
 void I2CWorker::cleanup() {
-    if (!m_is_initialized) {
-        return;
-    }
+    if (!m_is_initialized) return;
 
+#ifdef Q_OS_LINUX
     if (m_i2c_fd >= 0) {
         close(m_i2c_fd);
         m_i2c_fd = -1;
         DebugLogger::instance().info("I2C device released");
     }
+#else
+    m_i2c_fd = -1;
+#endif
 
     m_is_initialized = false;
 }
 
 void I2CWorker::openDevice(const uint8_t deviceAddress) {
-    auto i2cDevice = "/dev/i2c-1";
+#ifndef Q_OS_LINUX
+    m_device_address = deviceAddress;
+    m_i2c_fd = 1; // Mark simulator as connected.
+    const QString success =
+        QString("I2C simulator active (no hardware). Virtual device opened at address: 0x%1")
+            .arg(deviceAddress, 2, 16, QChar('0'));
+    DebugLogger::instance().warning(success);
+    emit deviceOpened(true, success);
+    QTimer::singleShot(100, this, &I2CWorker::sendInit);
+    return;
+#else
+    const char *i2cDevice = "/dev/i2c-1";
 
     m_i2c_fd = open(i2cDevice, O_RDWR);
     if (m_i2c_fd < 0) {
         const QString error = QString("Failed to open %1: %2")
-                .arg(i2cDevice, strerror(errno));
+                                  .arg(i2cDevice, strerror(errno));
         DebugLogger::instance().error(error);
         emit deviceOpened(false, error);
         return;
@@ -59,7 +77,7 @@ void I2CWorker::openDevice(const uint8_t deviceAddress) {
 
     if (ioctl(m_i2c_fd, I2C_SLAVE, deviceAddress) < 0) {
         const QString error =
-                QString("Failed to set I2C slave address 0x%1: %2")
+            QString("Failed to set I2C slave address 0x%1: %2")
                 .arg(deviceAddress, 2, 16, QChar('0'))
                 .arg(strerror(errno));
         DebugLogger::instance().error(error);
@@ -71,13 +89,13 @@ void I2CWorker::openDevice(const uint8_t deviceAddress) {
 
     m_device_address = deviceAddress;
     const QString success =
-            QString("I2C device opened successfully at address: 0x%1")
+        QString("I2C device opened successfully at address: 0x%1")
             .arg(deviceAddress, 2, 16, QChar('0'));
     DebugLogger::instance().info(success);
     emit deviceOpened(true, success);
 
-    // Wait longer before INIT to let Arduino stabilize
     QTimer::singleShot(500, this, &I2CWorker::sendInit);
+#endif
 }
 
 // Protocol Implementation
@@ -96,7 +114,7 @@ void I2CWorker::sendInit() {
         const auto status = static_cast<uint8_t>(response[2]);
         DebugLogger::instance().info(
             QString("INIT complete with status: 0x%1")
-            .arg(status, 2, 16, QChar('0'))
+                .arg(status, 2, 16, QChar('0'))
         );
         m_is_ready = true;
         emit initComplete(status == 0x00, status);
@@ -129,9 +147,7 @@ void I2CWorker::sendHealthCheck() {
 }
 
 void I2CWorker::pollButtonEvents() {
-    if (!checkInitialized() || !m_is_ready) {
-        return;
-    }
+    if (!checkInitialized() || !m_is_ready) return;
 
     QMutexLocker locker(&m_i2c_mutex);
 
@@ -150,7 +166,6 @@ void I2CWorker::pollButtonEvents() {
             buttonIds.append(static_cast<uint8_t>(response[3 + i]));
         }
 
-        // Only log when buttons are actually pressed
         if (count > 0) {
             DebugLogger::instance().info(
                 QString("Button events: %1 button(s) pressed").arg(count)
@@ -162,11 +177,10 @@ void I2CWorker::pollButtonEvents() {
     } else {
         m_consecutive_errors++;
 
-        // Only log errors occasionally
         if (m_consecutive_errors % 10 == 1) {
             DebugLogger::instance().warning(
                 QString("Button polling failed (consecutive errors: %1)")
-                .arg(m_consecutive_errors)
+                    .arg(m_consecutive_errors)
             );
         }
 
@@ -201,9 +215,9 @@ void I2CWorker::highlightButton(const uint8_t buttonId, const bool state) {
         const auto status = static_cast<uint8_t>(response[2]);
         DebugLogger::instance().debug(
             QString("HIGHLIGHT_BUTTON (ID: 0x%1, State: %2) status: 0x%3")
-            .arg(buttonId, 2, 16, QChar('0'))
-            .arg(state)
-            .arg(status, 2, 16, QChar('0'))
+                .arg(buttonId, 2, 16, QChar('0'))
+                .arg(state)
+                .arg(status, 2, 16, QChar('0'))
         );
         emit highlightButtonComplete(status == 0x00, status);
     } else {
@@ -228,9 +242,9 @@ void I2CWorker::highlightTower(const uint8_t towerId, const uint8_t row) {
         const auto status = static_cast<uint8_t>(response[2]);
         DebugLogger::instance().debug(
             QString("HIGHLIGHT_TOWER (ID: 0x%1, Row: %2) status: 0x%3")
-            .arg(towerId, 2, 16, QChar('0'))
-            .arg(row)
-            .arg(status, 2, 16, QChar('0'))
+                .arg(towerId, 2, 16, QChar('0'))
+                .arg(row)
+                .arg(status, 2, 16, QChar('0'))
         );
         emit highlightTowerComplete(status == 0x00, status);
     } else {
@@ -246,9 +260,7 @@ void I2CWorker::updateUserName(const QString &username) {
 
     const QByteArray data = username.toUtf8();
     if (data.size() > 255) {
-        DebugLogger::instance().error(
-            "Username too long (max 255 bytes)"
-        );
+        DebugLogger::instance().error("Username too long (max 255 bytes)");
         emit userNameUpdated(false, 0xFF);
         return;
     }
@@ -260,8 +272,8 @@ void I2CWorker::updateUserName(const QString &username) {
         const auto status = static_cast<uint8_t>(response[2]);
         DebugLogger::instance().info(
             QString("UPDATE_USER_NAME (%1) status: 0x%2")
-            .arg(username)
-            .arg(status, 2, 16, QChar('0'))
+                .arg(username)
+                .arg(status, 2, 16, QChar('0'))
         );
         emit userNameUpdated(status == 0x00, status);
     } else {
@@ -275,8 +287,7 @@ void I2CWorker::updateUserBalance(double balance) {
 
     QMutexLocker locker(&m_i2c_mutex);
 
-    // Convert to cents (multiply by 100) for transmission as int32
-    int32_t balanceCents = static_cast<int32_t>(balance * 100.0);
+    const int32_t balanceCents = static_cast<int32_t>(balance * 100.0);
 
     QByteArray data;
     data.append(static_cast<char>(balanceCents & 0xFF));
@@ -285,15 +296,14 @@ void I2CWorker::updateUserBalance(double balance) {
     data.append(static_cast<char>((balanceCents >> 24) & 0xFF));
 
     QByteArray response;
-    const bool success =
-            sendCommandWithRetry(CMD_UPDATE_USER_BALANCE, data, response);
+    const bool success = sendCommandWithRetry(CMD_UPDATE_USER_BALANCE, data, response);
 
     if (success && response.size() >= 4) {
         const auto status = static_cast<uint8_t>(response[2]);
         DebugLogger::instance().info(
             QString("UPDATE_USER_BALANCE (%1) status: 0x%2")
-            .arg(balance, 0, 'f', 2)
-            .arg(status, 2, 16, QChar('0'))
+                .arg(balance, 0, 'f', 2)
+                .arg(status, 2, 16, QChar('0'))
         );
         emit userBalanceUpdated(status == 0x00, status);
     } else {
@@ -305,18 +315,21 @@ void I2CWorker::updateUserBalance(double balance) {
 // Protocol Helper Methods
 
 void I2CWorker::flushI2CBuffers() const {
+#ifdef Q_OS_LINUX
     if (m_i2c_fd < 0) return;
 
-    // Simple flush - try to read any pending data
     uint8_t dummy[256];
     fcntl(m_i2c_fd, F_SETFL, O_NONBLOCK);
-    while (read(m_i2c_fd, dummy, sizeof(dummy)) > 0) {
-        // Discard all pending data
-    }
-    fcntl(m_i2c_fd, F_SETFL, 0); // Back to blocking
+    while (read(m_i2c_fd, dummy, sizeof(dummy)) > 0) {}
+    fcntl(m_i2c_fd, F_SETFL, 0);
+#endif
 }
 
 bool I2CWorker::reinitializeI2C() {
+#ifndef Q_OS_LINUX
+    DebugLogger::instance().warning("I2C reinit requested, but I2C is not supported on this platform.");
+    return false;
+#else
     DebugLogger::instance().warning("Attempting to reinitialize I2C...");
 
     if (m_i2c_fd >= 0) {
@@ -324,9 +337,9 @@ bool I2CWorker::reinitializeI2C() {
         m_i2c_fd = -1;
     }
 
-    QThread::msleep(1000); // Longer wait
+    QThread::msleep(1000);
 
-    const auto i2cDevice = "/dev/i2c-1";
+    const char *i2cDevice = "/dev/i2c-1";
     m_i2c_fd = open(i2cDevice, O_RDWR);
     if (m_i2c_fd < 0) {
         DebugLogger::instance().error("Failed to reopen I2C device");
@@ -343,6 +356,7 @@ bool I2CWorker::reinitializeI2C() {
     flushI2CBuffers();
     DebugLogger::instance().info("I2C reinitialized successfully");
     return true;
+#endif
 }
 
 QByteArray I2CWorker::buildPacket(const uint8_t command, const QByteArray &data) {
@@ -358,55 +372,56 @@ QByteArray I2CWorker::buildPacket(const uint8_t command, const QByteArray &data)
 }
 
 bool I2CWorker::sendPacket(const QByteArray &packet) const {
+#ifndef Q_OS_LINUX
+    Q_UNUSED(packet);
+    return false;
+#else
     if (const ssize_t written = write(m_i2c_fd, packet.data(), packet.size());
         written != packet.size()) {
         DebugLogger::instance().error(
             QString("Failed to write packet: %1 (wrote %2/%3 bytes)")
-            .arg(strerror(errno))
-            .arg(written)
-            .arg(packet.size())
+                .arg(strerror(errno))
+                .arg(written)
+                .arg(packet.size())
         );
         return false;
     }
-
     return true;
+#endif
 }
 
 QByteArray I2CWorker::receivePacket() const {
+#ifndef Q_OS_LINUX
+    return {};
+#else
     QThread::msleep(150);
 
     uint8_t buffer[MAX_PACKET_SIZE];
-
     ssize_t bytesRead = read(m_i2c_fd, buffer, MAX_PACKET_SIZE);
 
     if (bytesRead < 0) {
-        DebugLogger::instance().error(
-            QString("Read failed: %1").arg(strerror(errno))
-        );
+        DebugLogger::instance().error(QString("Read failed: %1").arg(strerror(errno)));
         return {};
     }
 
     if (bytesRead < 4) {
-        DebugLogger::instance().verbose(
-            QString("Response too short: %1 bytes").arg(bytesRead)
-        );
+        DebugLogger::instance().verbose(QString("Response too short: %1 bytes").arg(bytesRead));
         return {};
     }
 
     const uint8_t dataLength = buffer[1];
-
-    if (const int expectedLength = 3 + dataLength;
-        bytesRead >= expectedLength) {
+    if (const int expectedLength = 3 + dataLength; bytesRead >= expectedLength) {
         bytesRead = expectedLength;
     } else {
         DebugLogger::instance().warning(
             QString("Incomplete packet: expected %1, got %2 bytes")
-            .arg(expectedLength)
-            .arg(bytesRead)
+                .arg(expectedLength)
+                .arg(bytesRead)
         );
     }
 
     return {reinterpret_cast<char *>(buffer), bytesRead};
+#endif
 }
 
 bool I2CWorker::validateChecksum(const QByteArray &packet) {
@@ -414,16 +429,15 @@ bool I2CWorker::validateChecksum(const QByteArray &packet) {
 
     const QByteArray dataForChecksum = packet.left(packet.size() - 1);
     const uint8_t expectedChecksum = calculateChecksum(dataForChecksum);
-    const auto receivedChecksum =
-            static_cast<uint8_t>(packet[packet.size() - 1]);
+    const auto receivedChecksum = static_cast<uint8_t>(packet[packet.size() - 1]);
 
     const bool valid = (expectedChecksum == receivedChecksum);
 
     if (!valid) {
         DebugLogger::instance().error(
             QString("Checksum mismatch: expected 0x%1, got 0x%2")
-            .arg(expectedChecksum, 2, 16, QChar('0'))
-            .arg(receivedChecksum, 2, 16, QChar('0'))
+                .arg(expectedChecksum, 2, 16, QChar('0'))
+                .arg(receivedChecksum, 2, 16, QChar('0'))
         );
     }
 
@@ -432,7 +446,7 @@ bool I2CWorker::validateChecksum(const QByteArray &packet) {
 
 uint8_t I2CWorker::calculateChecksum(const QByteArray &data) {
     uint8_t checksum = 0;
-    for (const char byte: data) {
+    for (const char byte : data) {
         checksum ^= static_cast<uint8_t>(byte);
     }
     return checksum;
@@ -443,29 +457,42 @@ bool I2CWorker::sendCommandWithRetry(
     const QByteArray &data,
     QByteArray &response
 ) const {
-    const QByteArray packet = buildPacket(command, data);
+#ifndef Q_OS_LINUX
+    QByteArray responseData;
+    responseData.append(static_cast<char>(0x00)); // status OK
 
-    // VERBOSE: Log packet being sent
-    /*DebugLogger::instance().verbose(
-        QString("TX (%1 bytes): %2")
-            .arg(packet.size())
-            .arg(DebugLogger::formatHexDump(packet))
-    );*/
+    // For debug/custom commands, keep payload visible in simulator responses.
+    if (command != CMD_INIT &&
+        command != CMD_HEALTHCHECK &&
+        command != CMD_POLL_BUTTON_EVENTS &&
+        command != CMD_HIGHLIGHT_BUTTON &&
+        command != CMD_HIGHLIGHT_TOWER &&
+        command != CMD_UPDATE_USER_NAME &&
+        command != CMD_UPDATE_USER_BALANCE) {
+        responseData.append(data);
+    }
+
+    response.clear();
+    response.append(static_cast<char>(command | 0x80));
+    response.append(static_cast<char>(responseData.size()));
+    response.append(responseData);
+    response.append(static_cast<char>(calculateChecksum(response)));
+    return true;
+#else
+    const QByteArray packet = buildPacket(command, data);
 
     for (int attempt = 0; attempt < MAX_RETRIES; ++attempt) {
         if (attempt > 0) {
             DebugLogger::instance().warning(
                 QString("Retry %1/%2 for command 0x%3")
-                .arg(attempt + 1)
-                .arg(MAX_RETRIES)
-                .arg(command, 2, 16, QChar('0'))
+                    .arg(attempt + 1)
+                    .arg(MAX_RETRIES)
+                    .arg(command, 2, 16, QChar('0'))
             );
             QThread::msleep(500);
         }
 
-        if (!sendPacket(packet)) {
-            continue;
-        }
+        if (!sendPacket(packet)) continue;
 
         response = receivePacket();
         if (response.isEmpty()) {
@@ -473,24 +500,14 @@ bool I2CWorker::sendCommandWithRetry(
             continue;
         }
 
-        // VERBOSE: Log received packet
-        /*DebugLogger::instance().verbose(
-            QString("RX (%1 bytes): %2")
-                .arg(response.size())
-                .arg(DebugLogger::formatHexDump(response))
-        );*/
-
-        if (!validateChecksum(response)) {
-            continue;
-        }
+        if (!validateChecksum(response)) continue;
 
         const uint8_t expectedRsp = command | 0x80;
-
         if (const auto receivedCmd = static_cast<uint8_t>(response[0]); receivedCmd != expectedRsp) {
             DebugLogger::instance().error(
                 QString("Response mismatch. Expected 0x%1, got 0x%2")
-                .arg(expectedRsp, 2, 16, QChar('0'))
-                .arg(receivedCmd, 2, 16, QChar('0'))
+                    .arg(expectedRsp, 2, 16, QChar('0'))
+                    .arg(receivedCmd, 2, 16, QChar('0'))
             );
             continue;
         }
@@ -498,26 +515,27 @@ bool I2CWorker::sendCommandWithRetry(
         return true;
     }
 
-    const QString error =
-            QString("Command 0x%1 failed after %2 retries")
+    DebugLogger::instance().error(
+        QString("Command 0x%1 failed after %2 retries")
             .arg(command, 2, 16, QChar('0'))
-            .arg(MAX_RETRIES);
-    DebugLogger::instance().error(error);
+            .arg(MAX_RETRIES)
+    );
     return false;
+#endif
 }
 
 bool I2CWorker::checkInitialized() const {
-    if (m_i2c_fd < 0) {
-        return false;
-    }
-    return true;
+#ifdef Q_OS_LINUX
+    return m_i2c_fd >= 0;
+#else
+    return m_i2c_fd >= 0;
+#endif
 }
 
 void I2CWorker::startPolling(int intervalMs) {
     if (!m_poll_timer) {
         m_poll_timer = new QTimer(this);
-        connect(m_poll_timer, &QTimer::timeout,
-                this, &I2CWorker::pollButtonEvents);
+        connect(m_poll_timer, &QTimer::timeout, this, &I2CWorker::pollButtonEvents);
     }
 
     m_poll_timer->setInterval(intervalMs);
@@ -544,7 +562,6 @@ void I2CWorker::sendRawCommand(uint8_t command, const QVariantList &data) {
 
     QMutexLocker locker(&m_i2c_mutex);
 
-    // Convert QVariantList to QByteArray
     QByteArray byteData;
     for (const QVariant &v : data) {
         byteData.append(static_cast<char>(v.toInt() & 0xFF));
@@ -556,7 +573,6 @@ void I2CWorker::sendRawCommand(uint8_t command, const QVariantList &data) {
             .arg(byteData.size())
     );
 
-    // Log the data being sent
     if (!byteData.isEmpty()) {
         QString hexData;
         for (int i = 0; i < byteData.size(); ++i) {

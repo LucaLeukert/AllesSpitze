@@ -115,7 +115,7 @@ Rectangle {
 
         Button {
             Layout.fillWidth: true
-            text: slotMachine && slotMachine.canSpin ? "SPIN" : "Spinning..."
+            text: slotMachine && slotMachine.canSpin ? "SPIN" : (slotMachine && slotMachine.balance < slotMachine.bet ? "Kein Guthaben" : "Spinning...")
             enabled: slotMachine ? slotMachine.canSpin : false
             height: 50
 
