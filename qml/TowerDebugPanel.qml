@@ -10,6 +10,13 @@ Rectangle {
     border.color: "#555"
     border.width: 2
 
+    function safeText(value, fallback) {
+        if (value === undefined || value === null) {
+            return fallback
+        }
+        return String(value)
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 15
@@ -45,7 +52,7 @@ Rectangle {
                     spacing: 10
 
                     Label {
-                        text: towerDelegate.towerSymbol.toUpperCase()
+                        text: safeText(towerDelegate.towerSymbol, "---")
                         color: "white"
                         font.bold: true
                         font.pixelSize: 16
@@ -105,7 +112,7 @@ Rectangle {
                 }
 
                 Label {
-                    text: slotMachine ? slotMachine.lastResult.toUpperCase() : "---"
+                    text: slotMachine ? safeText(slotMachine.lastResult, "---") : "---"
                     color: "yellow"
                     font.bold: true
                     font.pixelSize: 18

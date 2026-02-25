@@ -193,7 +193,7 @@ ApplicationWindow {
                         anchors.rightMargin: px(8)
                         anchors.bottom: parent.bottom
                         anchors.bottomMargin: px(8)
-                        text: "Cashpot auf " + (slotMachine ? slotMachine.currentPrize.toFixed(0) : "0")
+                        text: "Cashpot auf 0"
                         font.pixelSize: px(24)
                         font.bold: true
                         font.family: "Georgia"
@@ -424,7 +424,7 @@ ApplicationWindow {
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: px(24)
-        visible: true
+        visible: false
     }
 
     Rectangle {

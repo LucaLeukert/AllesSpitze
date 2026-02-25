@@ -1,11 +1,13 @@
 #include "SlotMachine.h"
-#include "I2CWorker.h"
 #include "DebugLogger.h"
+#include "AudioEngine.h"
 #include <QPointer>
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
 #include <QTextStream>
+#include <QVariantMap>
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 
@@ -40,6 +42,9 @@ SlotMachine::SlotMachine(QObject *parent) : QObject(parent) {
             }
             if (allFull) {
                 DebugLogger::instance().info("🎰 JACKPOT! All towers full!");
+                if (m_audio_engine) {
+                    m_audio_engine->playSfx("ASPI_GewinnTop1");
+                }
                 emit jackpotWon();
                 cashout(); // Auto-cashout on jackpot
             }
@@ -72,6 +77,7 @@ void SlotMachine::setReel(SlotReel *reel) {
     if (m_reel) {
         connect(m_reel, &SlotReel::spinning_changed,
                 this, &SlotMachine::onSpinFinished);
+        applyDynamicRtpOdds();
     }
 }
 
@@ -83,14 +89,24 @@ void SlotMachine::spin() {
 
     // Deduct bet amount for the spin
     m_balance -= m_bet;
+    m_total_bets += m_bet;
     saveBalance();
     emit balanceChanged();
 
     m_can_spin = false;
     emit canSpinChanged();
 
+    if (m_audio_engine) {
+        const QString spinSound =
+            (m_spins_since_last_clear < 3) ? QStringLiteral("ASPI_WLauf6s_01")
+            : (m_spins_since_last_clear < 7) ? QStringLiteral("ASPI_WLauf6s_02")
+                                             : QStringLiteral("ASPI_WLauf6s_03");
+        m_audio_engine->playSfx(spinSound);
+    }
+
     DebugLogger::instance().info(QString("Starting slot machine spin... (Bet: %1, Balance: %2)").arg(m_bet).arg(m_balance));
     m_reel->spin();
+    ++m_spins_since_last_clear;
 }
 
 void SlotMachine::onSpinFinished() {
@@ -101,7 +117,13 @@ void SlotMachine::onSpinFinished() {
     const auto symbolType = m_reel->currentSymbolType();
     const bool isMiss = m_reel->isMiss();
 
+    if (m_audio_engine) {
+        m_audio_engine->fadeOutSfxByPrefix("ASPI_WLauf6s_", 120);
+        m_audio_engine->playSfx("SFX_ReelStop");
+    }
+
     processResult(symbolType, isMiss);
+    applyDynamicRtpOdds();
 
     m_can_spin = true;
     emit canSpinChanged();
@@ -123,15 +145,24 @@ void SlotMachine::processResult(Symbol::Type symbolType, bool isMiss) {
 
     if (symbolType == Symbol::Type::Sonne) {
         DebugLogger::instance().info("Result: SUN - increasing all towers");
+        if (m_audio_engine) {
+            m_audio_engine->playSfx("ASPI_GewLeiter_HiVal5");
+        }
         for (auto *tower: m_towers) {
             tower->increase();
-            updatePhysicalTower(tower->towerId());
+            emitTowerLevelForHardware(tower->towerId());
         }
         updateSessionState();
         return;
     }
 
     if (symbolType == Symbol::Type::Teufel) {
+        const bool hadAnyTowerLevel = std::any_of(m_towers.cbegin(), m_towers.cend(), [](const Tower *tower) {
+            return tower && tower->level() > 0;
+        });
+        if (hadAnyTowerLevel && m_audio_engine) {
+            m_audio_engine->playSfx("ASPI_GewLeiterNegativ");
+        }
         DebugLogger::instance().info("Result: DEVIL - resetting all towers");
         resetAllTowers();
         return;
@@ -140,35 +171,49 @@ void SlotMachine::processResult(Symbol::Type symbolType, bool isMiss) {
     // Find matching tower
     for (auto *tower: m_towers) {
         if (tower->symbolTypeEnum() == symbolType) {
-            tower->increase();
-            updatePhysicalTower(tower->towerId());
+            if (tower->increase() && m_audio_engine) {
+                const int level = tower->level();
+                if (level >= 1 && level <= 5) {
+                    QString soundName;
+                    switch (symbolType) {
+                        case Symbol::Type::Coin:
+                            soundName = QStringLiteral("ASPI_GewLeiter_HiVal%1").arg(level);
+                            break;
+                        case Symbol::Type::Kleeblatt:
+                            soundName = QStringLiteral("ASPI_GewLeiter_MidVaL%1").arg(level);
+                            break;
+                        case Symbol::Type::Marienkaefer:
+                            soundName = QStringLiteral("ASPI_GewLeiter_LowVal%1").arg(level);
+                            break;
+                        default:
+                            break;
+                    }
+                    if (!soundName.isEmpty()) {
+                        m_audio_engine->playSfx(soundName);
+                    }
+                }
+            }
+            emitTowerLevelForHardware(tower->towerId());
             updateSessionState();
             break;
         }
     }
 }
 
-void SlotMachine::updatePhysicalTower(int towerId) {
-    if (!m_i2c_worker) return;
-
+void SlotMachine::emitTowerLevelForHardware(const int towerId) {
     const int level = m_towers[towerId]->level();
-
-    QMetaObject::invokeMethod(
-        m_i2c_worker,
-        "highlightTower",
-        Q_ARG(uint8_t, static_cast<uint8_t>(towerId)),
-        Q_ARG(uint8_t, static_cast<uint8_t>(level))
-    );
+    emit towerLevelChangedForHardware(towerId, level);
 }
 
 void SlotMachine::resetAllTowers() {
     DebugLogger::instance().info("Resetting all towers");
     for (auto *tower: m_towers) {
         tower->reset();
-        updatePhysicalTower(tower->towerId());
+        emitTowerLevelForHardware(tower->towerId());
     }
     updatePrize();
     updateSessionState();
+    m_spins_since_last_clear = 0;
 }
 
 void SlotMachine::addBalance(double amount) {
@@ -303,6 +348,45 @@ void SlotMachine::updateSessionState() {
     }
 }
 
+void SlotMachine::applyDynamicRtpOdds() {
+    if (!m_reel) {
+        return;
+    }
+
+    const double expectedPayout = m_total_bets * TARGET_RTP;
+    const double payoutGap = expectedPayout - m_total_payouts;
+    const double controlRange = std::max(20.0, m_total_bets * 0.15);
+    const double control = std::clamp(payoutGap / controlRange, -1.0, 1.0);
+
+    const double missProbability = std::clamp(0.60 - (control * 0.15), 0.45, 0.78);
+    m_reel->set_miss_probability(missProbability);
+
+    auto clampWeight = [](const int value, const int minValue, const int maxValue) {
+        return std::clamp(value, minValue, maxValue);
+    };
+
+    const int coin = clampWeight(static_cast<int>(std::lround(3 + (2.5 * control))), 1, 6);
+    const int kleeblatt = clampWeight(static_cast<int>(std::lround(9 + (3.0 * control))), 5, 13);
+    const int marienkaefer = clampWeight(static_cast<int>(std::lround(18 + (2.0 * control))), 12, 22);
+    const int sonne = clampWeight(static_cast<int>(std::lround(2 + (2.0 * control))), 1, 4);
+    const int teufel = clampWeight(static_cast<int>(std::lround(16 - (6.0 * control))), 8, 22);
+
+    QVariantMap probabilities;
+    probabilities.insert("coin", coin);
+    probabilities.insert("kleeblatt", kleeblatt);
+    probabilities.insert("marienkaefer", marienkaefer);
+    probabilities.insert("sonne", sonne);
+    probabilities.insert("teufel", teufel);
+    m_reel->set_probabilities(probabilities);
+}
+
+void SlotMachine::recordPayout(const double amount) {
+    if (amount <= 0) {
+        return;
+    }
+    m_total_payouts += amount;
+}
+
 void SlotMachine::cashout() {
     const double prize = currentPrize();
 
@@ -315,6 +399,7 @@ void SlotMachine::cashout() {
 
     // Add prize to balance
     m_balance += prize;
+    recordPayout(prize);
     saveBalance();
     emit balanceChanged();
 
@@ -334,10 +419,15 @@ void SlotMachine::acceptPrize() {
         return;
     }
 
+    m_price_accepted = true;
     DebugLogger::instance().info(QString("✅ Prize accepted: %1 units").arg(prize));
 
     m_accepted_prize = prize;
     emit acceptedPrizeChanged();
+    if (m_audio_engine) {
+        m_audio_engine->stopSfxByPrefix("SFX_GambleBgLoop");
+        m_audio_engine->playLoopSfx("SFX_ChooseGambleBgLoop");
+    }
 
     // Reset towers so player can keep spinning
     resetAllTowers();
@@ -350,14 +440,20 @@ void SlotMachine::payoutAccepted() {
     }
 
     const double prize = m_accepted_prize;
+    m_price_accepted = false;
     DebugLogger::instance().info(QString("💰 Paying out accepted prize: %1 units").arg(prize));
 
     m_balance += prize;
+    recordPayout(prize);
     saveBalance();
     emit balanceChanged();
 
     m_accepted_prize = 0.0;
     emit acceptedPrizeChanged();
+    if (m_audio_engine) {
+        m_audio_engine->fadeOutSfxByPrefix("SFX_ChooseGambleBgLoop", 120);
+        m_audio_engine->playSfx("SFX_Collect");
+    }
 
     emit cashedOut(prize);
     DebugLogger::instance().info(QString("New balance after payout: %1 units").arg(m_balance));
@@ -371,7 +467,7 @@ QString SlotMachine::balanceFilePath() {
     return dataPath + "/balance.txt";
 }
 
-void SlotMachine::saveBalance() {
+void SlotMachine::saveBalance() const {
     QFile file(balanceFilePath());
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
@@ -390,7 +486,7 @@ QVariantList SlotMachine::riskLadderSteps() const {
         QVariantMap step;
         step["level"] = i;
         step["multiplier"] = RISK_MULTIPLIERS[i];
-        step["prize"] = m_risk_base_prize * RISK_MULTIPLIERS[i];
+        step["prize"] = std::round((m_bet * RISK_MULTIPLIERS[i]) * 100.0) / 100.0;
         steps.append(step);
     }
 
@@ -415,18 +511,36 @@ void SlotMachine::startRiskMode() {
         return;
     }
 
-    DebugLogger::instance().info(QString("🎲 Starting risk mode with prize: %1").arg(prize));
+    m_price_accepted = false;
+    DebugLogger::instance().info(QString("Starting risk mode with prize: %1").arg(prize));
+    if (m_audio_engine) {
+        m_audio_engine->fadeOutSfxByPrefix("SFX_ChooseGambleBgLoop", 120);
+        m_audio_engine->playLoopSfx("SFX_GambleBgLoop");
+    }
 
-    // Store the prize and reset towers (prize is now "at risk")
-    m_risk_base_prize = prize;
-    m_risk_prize = prize;
-    m_risk_level = 0; // 0 = 1:1 entry prize
+    int startLevel = 0;
+    for (int i = 0; i < RISK_LADDER_STEPS; ++i) {
+        const double ladderPrize = m_bet * RISK_MULTIPLIERS[i];
+        if (ladderPrize <= prize) {
+            startLevel = i;
+            continue;
+        }
+        break;
+    }
+    const double checkpointPrize = m_bet * RISK_MULTIPLIERS[RISK_CHECKPOINT_LEVEL];
+    if (startLevel >= RISK_CHECKPOINT_LEVEL && prize <= checkpointPrize) {
+        startLevel = RISK_CHECKPOINT_LEVEL - 1;
+    }
+
+    m_risk_level = startLevel;
+    m_risk_prize = std::round(prize * 100.0) / 100.0;
+    m_risk_base_prize = m_risk_prize;
     m_risk_mode_active = true;
     m_risk_animating = false;
-    m_risk_animation_position = 0;
+    m_risk_animation_position = m_risk_level;
     m_risk_animation_mode = 0;
-    m_ausspielung_started = false;
-    m_risk_scan_position = 0;
+    m_ausspielung_started = m_risk_level > RISK_CHECKPOINT_LEVEL;
+    m_risk_scan_position = m_risk_level + 1;
 
     // Clear accepted prize since it's now in the risk ladder
     if (m_accepted_prize > 0) {
@@ -437,7 +551,7 @@ void SlotMachine::startRiskMode() {
     // Reset towers without adding to balance
     for (auto *tower: m_towers) {
         tower->reset();
-        updatePhysicalTower(tower->towerId());
+        emitTowerLevelForHardware(tower->towerId());
     }
     updatePrize();
     updateSessionState();
@@ -445,6 +559,7 @@ void SlotMachine::startRiskMode() {
     emit riskModeChanged();
     emit riskPrizeChanged();
     emit riskLevelChanged();
+    emit riskAnimationPositionChanged();
     emit riskAusspielungStartedChanged();
     emit canSpinChanged();
     emit canChangeBetChanged();
@@ -482,12 +597,23 @@ void SlotMachine::riskHigher() {
     }
 
     DebugLogger::instance().info(
-        QString("Attempting risk: level %1 (%2x)")
+        QString("Attempting risk: level %1 (prize %2)")
         .arg(m_risk_level)
-        .arg(RISK_MULTIPLIERS[m_risk_level], 0, 'f', 1));
+        .arg(m_risk_prize, 0, 'f', 2));
+    const double checkpointPrize = std::round((m_bet * RISK_MULTIPLIERS[RISK_CHECKPOINT_LEVEL]) * 100.0) / 100.0;
 
     // First action at the checkpoint starts looping Ausspielung scan.
-    if (m_risk_level == RISK_CHECKPOINT_LEVEL && !m_ausspielung_started) {
+    if (m_risk_level == RISK_CHECKPOINT_LEVEL && !m_ausspielung_started && m_risk_prize <= checkpointPrize) {
+        if (m_audio_engine) {
+            m_audio_engine->fadeSfxVolumeByPrefix("SFX_GambleBgLoop", 0, 120);
+            m_audio_engine->stopSfxByPrefix("SFX_GamblePlayoff");
+            m_audio_engine->playSfx("SFX_GamblePlayoff");
+            QTimer::singleShot(1000, this, [this]() {
+                if (m_audio_engine && m_risk_mode_active) {
+                    m_audio_engine->fadeSfxVolumeByPrefix("SFX_GambleBgLoop", 1.0, 220);
+                }
+            });
+        }
         m_risk_animating = true;
         m_risk_animation_mode = 1;
         m_risk_scan_position = RISK_CHECKPOINT_LEVEL + 1;
@@ -505,13 +631,25 @@ void SlotMachine::riskHigher() {
     const bool willWin = dist(m_rng) == 1;
 
     // Resolve instantly to lose target or win target:
-    // above checkpoint => one down vs next level
-    // at/below checkpoint => lose-all vs next level
-    m_risk_lose_position =
-        ((m_risk_level > RISK_CHECKPOINT_LEVEL) || (m_risk_level == RISK_CHECKPOINT_LEVEL && m_ausspielung_started))
-        ? (m_risk_level - 1)
-        : -1;
-    m_risk_win_position = m_risk_level + 1;
+    // before Ausspielung-start: lose-all vs next higher ladder step
+    // after Ausspielung-start/above checkpoint: one-down vs next level
+    if (!m_ausspielung_started) {
+        m_risk_lose_position = -1;
+        m_risk_win_position = RISK_LADDER_STEPS - 1;
+        for (int i = 0; i < RISK_LADDER_STEPS; ++i) {
+            const double ladderPrize = std::round((m_bet * RISK_MULTIPLIERS[i]) * 100.0) / 100.0;
+            if (ladderPrize > m_risk_prize) {
+                m_risk_win_position = i;
+                break;
+            }
+        }
+    } else {
+        m_risk_lose_position =
+            ((m_risk_level > RISK_CHECKPOINT_LEVEL) || (m_risk_level == RISK_CHECKPOINT_LEVEL && m_ausspielung_started))
+            ? (m_risk_level - 1)
+            : -1;
+        m_risk_win_position = qMin(m_risk_level + 1, RISK_LADDER_STEPS - 1);
+    }
     m_risk_target_position = willWin ? m_risk_win_position : m_risk_lose_position;
     m_risk_animation_position = m_risk_target_position;
 
@@ -523,7 +661,10 @@ void SlotMachine::riskHigher() {
 void SlotMachine::onRiskAnimationStep() {
     if (m_risk_animation_mode == 1) {
         if (m_risk_scan_position > RISK_LADDER_STEPS - 1) {
+            m_audio_engine->playSfx("SFX_BlinkDown1");
             m_risk_scan_position = RISK_CHECKPOINT_LEVEL + 1;
+        } else {
+            m_audio_engine->playSfx("SFX_BlinkUp1");
         }
         m_risk_animation_position = m_risk_scan_position;
         ++m_risk_scan_position;
@@ -533,7 +674,10 @@ void SlotMachine::onRiskAnimationStep() {
 
     if (m_risk_animation_mode == 2) {
         if (m_risk_scan_position > RISK_LADDER_STEPS - 1) {
+            m_audio_engine->playSfx("SFX_BlinkDown1");
             m_risk_scan_position = RISK_CHECKPOINT_LEVEL + 1;
+        } else {
+            m_audio_engine->playSfx("SFX_BlinkUp1");
         }
         m_risk_animation_position = m_risk_scan_position;
         ++m_risk_scan_position;
@@ -548,7 +692,7 @@ void SlotMachine::onRiskAnimationStep() {
         m_risk_animating = false;
         m_ausspielung_started = true;
         m_risk_level = m_risk_target_position;
-        m_risk_prize = m_risk_base_prize * RISK_MULTIPLIERS[m_risk_level];
+        m_risk_prize = std::round((m_bet * RISK_MULTIPLIERS[m_risk_level]) * 100.0) / 100.0;
         m_risk_scan_position = m_risk_level + 1;
 
         emit riskAnimatingChanged();
@@ -563,11 +707,15 @@ void SlotMachine::onRiskAnimationStep() {
 
 void SlotMachine::finishRiskAttempt(bool won) {
     if (won) {
+        if (m_audio_engine) {
+            m_audio_engine->stopSfxByPrefix("SFX_Ladder");
+            m_audio_engine->playSfx("SFX_LadderUp");
+        }
         m_risk_animating = true;
         emit riskAnimatingChanged();
 
         m_risk_level++;
-        m_risk_prize = m_risk_base_prize * RISK_MULTIPLIERS[m_risk_level];
+        m_risk_prize = std::round((m_bet * RISK_MULTIPLIERS[m_risk_level]) * 100.0) / 100.0;
         m_risk_animation_position = m_risk_level;
 
         DebugLogger::instance().info(QString("🎉 Risk won! New level: %1, Prize: %2").arg(m_risk_level).arg(m_risk_prize));
@@ -600,10 +748,14 @@ void SlotMachine::finishRiskAttempt(bool won) {
         emit riskAnimatingChanged();
 
         if (m_risk_target_position >= 0) {
+            if (m_audio_engine) {
+                m_audio_engine->stopSfxByPrefix("SFX_Ladder");
+                m_audio_engine->playSfx("SFX_LadderDown");
+            }
             DebugLogger::instance().info(QString("↘ Risk lost above Ausspielung, dropping to level %1").arg(m_risk_target_position));
 
             m_risk_level = m_risk_target_position;
-            m_risk_prize = m_risk_base_prize * RISK_MULTIPLIERS[m_risk_level];
+            m_risk_prize = std::round((m_bet * RISK_MULTIPLIERS[m_risk_level]) * 100.0) / 100.0;
             m_risk_animation_position = m_risk_level;
 
             emit riskLevelChanged();
@@ -611,6 +763,10 @@ void SlotMachine::finishRiskAttempt(bool won) {
             emit riskAnimationPositionChanged();
         } else {
             // At or below checkpoint - lose everything
+            if (m_audio_engine) {
+                m_audio_engine->fadeOutSfxByPrefix("SFX_GambleBgLoop", 120);
+                m_audio_engine->playSfx("SFX_GambleLoose");
+            }
             DebugLogger::instance().info("💀 Risk lost! Prize forfeited.");
 
             m_risk_animation_position = -1;
@@ -658,9 +814,14 @@ void SlotMachine::collectRiskPrize() {
     const double prize = m_risk_prize;
 
     DebugLogger::instance().info(QString("💰 Collecting risk prize: %1").arg(prize));
+    if (m_audio_engine) {
+        m_audio_engine->fadeOutSfxByPrefix("SFX_GambleBgLoop", 120);
+        m_audio_engine->playSfx("SFX_GambleCollect");
+    }
 
     // Add to balance
     m_balance += prize;
+    recordPayout(prize);
     saveBalance();
     emit balanceChanged();
 
@@ -689,8 +850,14 @@ void SlotMachine::collectRiskOneToOnePrize() {
 
     const double prize = m_risk_base_prize;
     DebugLogger::instance().info(QString("💰 Collecting 1:1 risk prize: %1").arg(prize));
+    if (m_audio_engine) {
+        m_audio_engine->fadeOutSfxByPrefix("SFX_GambleBgLoop", 120);
+        m_audio_engine->fadeOutSfxByPrefix("SFX_ChooseGambleBgLoop", 120);
+        m_audio_engine->playSfx("SFX_GambleCollect");
+    }
 
     m_balance += prize;
+    recordPayout(prize);
     saveBalance();
     emit balanceChanged();
 
@@ -712,4 +879,12 @@ void SlotMachine::collectRiskOneToOnePrize() {
     emit riskCollected(prize);
     emit canSpinChanged();
     emit canChangeBetChanged();
+}
+bool SlotMachine::applyReelProbabilities(const QVariantMap &probabilities) {
+    if (!m_reel) {
+        DebugLogger::instance().warning("Cannot apply reel probabilities - reel not set");
+        return false;
+    }
+    m_reel->set_probabilities(probabilities);
+    return true;
 }

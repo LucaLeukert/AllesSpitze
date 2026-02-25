@@ -9,17 +9,17 @@ SlotReel::SlotReel(QQuickItem *parent)
     : QQuickPaintedItem(parent)
       , m_spinning(false)
       , m_rotation(0.0)
-      , m_miss_probability(0.55)  // Reduced from 0.70 for better RTP
+      , m_miss_probability(0.60)  // Tuned lower hit rate for ~80% RTP target
       , m_current_miss_offset(0.0)
       , m_target_miss_offset(0.0) {
     // Make it much larger to fill screen height
     setWidth(600);
     setHeight(600);
 
-    // Probabilities tuned for ~95% RTP
+    // Probabilities tuned for ~80% RTP
     // Symbol frequency is INVERSE to reward value
-    // Total weight: 52 (excluding miss)
-    // Hit rate: 45% (miss 55%)
+    // Total weight: 48 (excluding miss)
+    // Hit rate: 40% (miss 60%)
     //
     // Reward tiers (Level 1-5 multipliers):
     // - Marienkäfer: 1, 2, 4, 7, 10    (LOW value)    -> HIGH frequency
@@ -29,17 +29,17 @@ SlotReel::SlotReel(QQuickItem *parent)
     // - Teufel: resets ALL towers      (PENALTY)      -> MODERATE
     //
     // Expected symbol distribution when hitting:
-    // - Marienkäfer: 20/52 = 38.5% (common, low value)
-    // - Kleeblatt:   15/52 = 28.8% (medium frequency, medium value)
-    // - Coin:        5/52  = 9.6%  (rare, highest value)
-    // - Sonne:       4/52  = 7.7%  (rare, bonus)
-    // - Teufel:      8/52  = 15.4% (penalty - resets all)
+    // - Marienkäfer: 18/48 = 37.5% (common, low value)
+    // - Kleeblatt:    9/48 = 18.8% (less frequent, medium value)
+    // - Coin:         3/48 = 6.3%  (rare, highest value)
+    // - Sonne:        2/48 = 4.2%  (very rare, bonus)
+    // - Teufel:      16/48 = 33.3% (frequent penalty)
     m_symbols = {
-        Symbol(":/images/marienkaefer.png", Symbol::Type::Marienkaefer, 20),
-        Symbol(":/images/coin.png",        Symbol::Type::Coin,          5),
-        Symbol(":/images/kleeblatt.png",   Symbol::Type::Kleeblatt,    15),
-        Symbol(":/images/sonne.png",       Symbol::Type::Sonne,         4),
-        Symbol(":/images/teufel.png",      Symbol::Type::Teufel,        8)
+        Symbol(":/images/marienkaefer.png", Symbol::Type::Marienkaefer, 18),
+        Symbol(":/images/coin.png",        Symbol::Type::Coin,          3),
+        Symbol(":/images/kleeblatt.png",   Symbol::Type::Kleeblatt,     9),
+        Symbol(":/images/sonne.png",       Symbol::Type::Sonne,         2),
+        Symbol(":/images/teufel.png",      Symbol::Type::Teufel,       16)
     };
 
 
@@ -54,7 +54,7 @@ SlotReel::SlotReel(QQuickItem *parent)
 
     m_spin_animation = new QPropertyAnimation(this, "rotation", this);
     m_spin_animation->setDuration(2000);
-    m_spin_animation->setEasingCurve(QEasingCurve::OutQuart);
+    m_spin_animation->setEasingCurve(QEasingCurve::Linear);
 
     connect(m_spin_animation, &QPropertyAnimation::finished,
             this, &SlotReel::on_spin_finished);
@@ -139,14 +139,18 @@ void SlotReel::spin() {
 
     const int minSymbols = 3;
     const int maxSymbols = 5;
-    const int minDurationMs = 1000;
-    const int maxDurationMs = 1500;
+    const int minDurationMs = 900;
+    const int maxDurationMs = 1300;
     const qreal durationFactor = (symbolsToSpin - minSymbols) / static_cast<qreal>(maxSymbols - minSymbols);
     const int durationMs = qRound(minDurationMs + durationFactor * (maxDurationMs - minDurationMs));
     m_spin_animation->setDuration(durationMs);
-
+    m_spin_animation->setEasingCurve(QEasingCurve::Linear);
     m_spin_animation->setStartValue(m_rotation);
     m_spin_animation->setEndValue(targetRotation);
+    m_spin_animation->setKeyValueAt(0.08, m_rotation - (spinDistance * 0.08));   // quick startup
+    m_spin_animation->setKeyValueAt(0.90, m_rotation - (spinDistance * 0.90));   // hold near-constant speed
+    m_spin_animation->setKeyValueAt(0.96, targetRotation - (currentSymbolHeight * 0.08)); // short rebound
+    m_spin_animation->setKeyValueAt(1.00, targetRotation);
     m_spin_animation->start();
 
 #ifdef QT_DEBUG
@@ -174,6 +178,20 @@ void SlotReel::set_probabilities(const QVariantMap &probabilities) {
         {"teufel", Symbol::Type::Teufel, ":/images/teufel.png"}
     };
 
+    int visibleIndexA = -1;
+    int visibleIndexB = -1;
+    QVector<Symbol> visibleSymbols;
+    const qreal currentSymbolHeight = symbol_height();
+    if (m_symbol_sequence.size() == SEQUENCE_LENGTH && currentSymbolHeight > 0.0) {
+        const qreal sequenceHeight = currentSymbolHeight * SEQUENCE_LENGTH;
+        qreal currentOffset = fmod(m_rotation, sequenceHeight);
+        if (currentOffset < 0) currentOffset += sequenceHeight;
+        visibleIndexA = static_cast<int>(currentOffset / currentSymbolHeight);
+        visibleIndexB = (visibleIndexA + 1) % SEQUENCE_LENGTH;
+        visibleSymbols.append(m_symbol_sequence[visibleIndexA]);
+        visibleSymbols.append(m_symbol_sequence[visibleIndexB]);
+    }
+
     m_symbols.clear();
     for (const auto &config : configs) {
         const int prob = probabilities.contains(config.key)
@@ -185,6 +203,10 @@ void SlotReel::set_probabilities(const QVariantMap &probabilities) {
     }
 
     build_symbol_sequence();
+    if (visibleIndexA >= 0 && visibleIndexB >= 0 && visibleSymbols.size() == 2 && m_symbol_sequence.size() == SEQUENCE_LENGTH) {
+        m_symbol_sequence[visibleIndexA] = visibleSymbols[0];
+        m_symbol_sequence[visibleIndexB] = visibleSymbols[1];
+    }
 }
 
 void SlotReel::on_spin_finished() {

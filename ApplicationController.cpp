@@ -1,25 +1,29 @@
 #include "ApplicationController.h"
+
 #include <QtQml>
 #include <QFile>
 #include <QTextStream>
+#include <QCoreApplication>
+
 #include "DebugLogger.h"
+#include "HardwarePanelBackend.h"
+#include "HardwarePanelBackendFactory.h"
 
 ApplicationController::ApplicationController(QObject *parent)
     : QObject(parent)
       , m_engine(new QQmlApplicationEngine)
-      , m_workerThread(new QThread)
-      , m_worker(new I2CWorker)
+      , m_panelBackend(createHardwarePanelBackend().release())
       , m_serialThread(new QThread)
       , m_serialWorker(new SerialWorker)
       , m_slotMachine(new SlotMachine)
+      , m_audioEngine(new AudioEngine)
       , m_healthcheckTimer(new QTimer(this)) {
     m_healthcheckTimer->setInterval(1000);
 }
 
 ApplicationController::~ApplicationController() {
-    if (m_workerThread) {
-        m_workerThread->quit();
-        m_workerThread->wait();
+    if (m_panelBackend) {
+        m_panelBackend->shutdownBackend();
     }
     if (m_serialThread) {
         m_serialThread->quit();
@@ -37,20 +41,10 @@ void ApplicationController::initialize() {
     setupConnections();
     setupCleanup();
 
-    QTimer::singleShot(200, this, [this]() {
-        QMetaObject::invokeMethod(m_worker.data(), "openDevice",
-                                  Q_ARG(uint8_t, 0x42));
-    });
+    beginPanelStartupSequence();
 
-    QTimer::singleShot(500, this, [this]() {
-        applyPowerState();
-        startHealthcheck();
-    });
-
-    // Open serial port after a delay
     QTimer::singleShot(1000, this, [this]() {
-        QMetaObject::invokeMethod(m_serialWorker.data(), "openPort",
-                                  Qt::QueuedConnection);
+        emit requestSerialOpenPort(QString());
     });
 }
 
@@ -60,12 +54,25 @@ bool ApplicationController::start() const {
         return false;
     }
 
+    const bool noDisplay = qEnvironmentVariableIsEmpty("DISPLAY") &&
+                           qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY");
+    const bool offscreenPlatform = qEnvironmentVariable("QT_QPA_PLATFORM")
+                                   .compare("offscreen", Qt::CaseInsensitive) == 0;
+    if (noDisplay || offscreenPlatform) {
+        DebugLogger::instance().warning("Headless mode detected: skipping QML UI load");
+        return true;
+    }
+
     m_engine->load(QUrl(QStringLiteral("qrc:/qml/main.qml")));
 
     if (m_engine->rootObjects().isEmpty()) {
         qCritical() << "Failed to load QML - no root objects created";
         qCritical() << "QML Errors:" << m_engine->hasError();
         return false;
+    }
+
+    if (m_audioEngine) {
+        m_audioEngine->playSfx("AllesSpitzeIntro");
     }
 
     return true;
@@ -85,95 +92,90 @@ void ApplicationController::setupQmlEngine() const {
 
     m_engine->rootContext()->setContextProperty("appController", const_cast<ApplicationController *>(this));
     m_engine->rootContext()->setContextProperty("slotMachine", m_slotMachine.data());
+    m_engine->rootContext()->setContextProperty("audioEngine", m_audioEngine.data());
 }
 
 void ApplicationController::setupI2CWorker() {
-    m_worker->moveToThread(m_workerThread.data());
-    connect(m_workerThread.data(), &QThread::started,
-            m_worker.data(), &I2CWorker::initialize);
-    m_workerThread->start();
+    if (!m_panelBackend) {
+        qCritical() << "Hardware panel backend is null";
+    }
 }
 
 void ApplicationController::setupSerialWorker() {
     m_serialWorker->moveToThread(m_serialThread.data());
     connect(m_serialThread.data(), &QThread::started,
             m_serialWorker.data(), &SerialWorker::initialize);
+    connect(this, &ApplicationController::requestSerialOpenPort,
+            m_serialWorker.data(), &SerialWorker::openPort, Qt::QueuedConnection);
+    connect(this, &ApplicationController::requestSerialCleanup,
+            m_serialWorker.data(), &SerialWorker::cleanup, Qt::QueuedConnection);
+    connect(this, &ApplicationController::requestSerialSendResponse,
+            m_serialWorker.data(), &SerialWorker::sendResponse, Qt::QueuedConnection);
     m_serialThread->start();
 }
 
 void ApplicationController::setupSlotMachine() const {
     loadBalance();
-    m_slotMachine->setI2CWorker(m_worker.data());
+    m_slotMachine->setAudioEngine(m_audioEngine.data());
 }
 
 void ApplicationController::setupConnections() {
-    // Connect button events with proper cross-thread invocation
-    connect(m_worker.data(), &I2CWorker::buttonEventsReceived,
-            this, [this](const QVector<uint8_t> &buttons) {
-                if (!m_powered_on) {
-                    return;  // Ignore button events when powered off
-                }
-                for (const uint8_t buttonId : buttons) {
-                    handleButtonPress(buttonId);
-                }
+    if (m_panelBackend) {
+        connect(m_panelBackend.data(), &HardwarePanelBackend::buttonEventsReceived,
+                this, [this](const QVector<uint8_t> &buttons) {
+                    if (!m_powered_on) {
+                        return;
+                    }
+                    for (const uint8_t buttonId: buttons) {
+                        handleButtonPress(buttonId);
+                    }
+                });
+
+        connect(m_panelBackend.data(), &HardwarePanelBackend::healthCheckComplete,
+                this, &ApplicationController::handleHealthcheckResponse);
+
+        connect(m_panelBackend.data(), &HardwarePanelBackend::rawCommandResponse,
+                this, &ApplicationController::handleRawCommandResponse);
+
+        connect(m_panelBackend.data(), &HardwarePanelBackend::panelOpened,
+                this, [](bool success, const QString &message) {
+                    if (success) {
+                        DebugLogger::instance().info("Panel: " + message);
+                    } else {
+                        DebugLogger::instance().warning("Panel: " + message);
+                    }
+                });
+
+        connect(m_panelBackend.data(), &HardwarePanelBackend::backendReady,
+                this, &ApplicationController::onPanelReady);
+
+        connect(m_panelBackend.data(), &HardwarePanelBackend::backendError,
+                this, [](const QString &error) {
+                    DebugLogger::instance().warning("Panel backend: " + error);
+                });
+    }
+
+    connect(m_slotMachine.data(), &SlotMachine::towerLevelChangedForHardware,
+            this, [this](int towerId, int level) {
+                sendTowerLevelIfChanged(static_cast<uint8_t>(towerId), static_cast<uint8_t>(level));
             });
 
-    //send balance on init complete
-    connect(m_worker.data(), &I2CWorker::initialization_complete,
-            this, [this]() {
-                QMetaObject::invokeMethod(m_worker.data(), "updateUserBalance",
-                                          Qt::QueuedConnection,
-                                          Q_ARG(double, m_slotMachine->balance()));
-                // Initialize button states
-                updateButtonStates();
-            });
-
-    // Update button highlights when risk mode changes
     connect(m_slotMachine.data(), &SlotMachine::riskModeChanged,
-            this, [this]() {
-                updateButtonStates();
-            });
-
-    // Update button highlights when can spin changes
+            this, [this]() { updateButtonStates(); });
     connect(m_slotMachine.data(), &SlotMachine::canSpinChanged,
-            this, [this]() {
-                updateButtonStates();
-            });
-
-    // Update button highlights when session active changes
+            this, [this]() { updateButtonStates(); });
     connect(m_slotMachine.data(), &SlotMachine::sessionActiveChanged,
-            this, [this]() {
-                updateButtonStates();
-            });
-
-    // Update button highlights when prize changes
+            this, [this]() { updateButtonStates(); });
     connect(m_slotMachine.data(), &SlotMachine::currentPrizeChanged,
-            this, [this]() {
-                updateButtonStates();
-            });
-
-    // Update button highlights when risk animating changes
+            this, [this]() { updateButtonStates(); });
     connect(m_slotMachine.data(), &SlotMachine::riskAnimatingChanged,
-            this, [this]() {
-                updateButtonStates();
-            });
-
-    // Connect healthcheck response
-    connect(m_worker.data(), &I2CWorker::healthCheckComplete,
-            this, &ApplicationController::handleHealthcheckResponse);
-
-    // Connect raw command response for debug interface
-    connect(m_worker.data(), &I2CWorker::rawCommandResponse,
-            this, &ApplicationController::handleRawCommandResponse);
+            this, [this]() { updateButtonStates(); });
 
     connect(m_slotMachine.data(), &SlotMachine::balanceChanged,
             this, [this]() {
-                QMetaObject::invokeMethod(m_worker.data(), "updateUserBalance",
-                                          Qt::QueuedConnection,
-                                          Q_ARG(double, m_slotMachine->balance()));
+                sendBalanceIfChanged(m_slotMachine->balance());
             });
 
-    // Serial worker connections
     connect(m_serialWorker.data(), &SerialWorker::commandReceived,
             this, &ApplicationController::handleSerialCommand);
 
@@ -188,13 +190,48 @@ void ApplicationController::setupConnections() {
 }
 
 void ApplicationController::startHealthcheck() {
-    // Use QMetaObject::invokeMethod for cross-thread call
     connect(m_healthcheckTimer.data(), &QTimer::timeout,
             this, [this]() {
-                QMetaObject::invokeMethod(m_worker.data(), "sendHealthCheck",
-                                          Qt::QueuedConnection);
-            });
+                if (m_panelBackend) {
+                    m_panelBackend->sendHealthCheck();
+                }
+            }, Qt::UniqueConnection);
     m_healthcheckTimer->start();
+}
+
+void ApplicationController::beginPanelStartupSequence() {
+    if (!m_panelBackend) {
+        return;
+    }
+
+    m_state = ControllerState::Starting;
+    m_panelBackend->initializeBackend();
+    m_panelBackend->openPanel();
+}
+
+void ApplicationController::beginPanelRecoverySequence() {
+    if (!m_panelBackend || m_state == ControllerState::ShuttingDown) {
+        return;
+    }
+
+    m_state = ControllerState::Recovering;
+    m_healthcheckTimer->stop();
+    m_panelBackend->shutdownBackend();
+
+    QTimer::singleShot(2000, this, [this]() {
+        if (m_state == ControllerState::ShuttingDown) {
+            return;
+        }
+        beginPanelStartupSequence();
+    });
+}
+
+void ApplicationController::onPanelReady() {
+    m_state = ControllerState::Ready;
+    m_consecutiveFailures = 0;
+    invalidateHardwareStateCache();
+    applyPowerState();
+    startHealthcheck();
 }
 
 void ApplicationController::handleHealthcheckResponse(const bool success, const uint8_t status) {
@@ -218,41 +255,20 @@ void ApplicationController::handleHealthcheckResponse(const bool success, const 
         DebugLogger::instance().error(
             "Too many consecutive I2C failures. Attempting recovery..."
         );
-        m_healthcheckTimer->stop();
-
-        QMetaObject::invokeMethod(m_worker.data(), "cleanup",
-                                  Qt::QueuedConnection);
-
-        // Attempt reinitialization after delay
-        QTimer::singleShot(2000, this, [this]() {
-            QMetaObject::invokeMethod(m_worker.data(), "initialize",
-                                      Qt::QueuedConnection);
-
-            QTimer::singleShot(500, this, [this]() {
-                QMetaObject::invokeMethod(m_worker.data(), "openDevice",
-                                          Qt::QueuedConnection,
-                                          Q_ARG(uint8_t, 0x42));
-                m_consecutiveFailures = 0;
-                m_healthcheckTimer->start();
-            });
-        });
+        beginPanelRecoverySequence();
     }
 }
 
 void ApplicationController::setupCleanup() {
     connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
+        m_state = ControllerState::ShuttingDown;
         m_healthcheckTimer->stop();
 
-        QMetaObject::invokeMethod(m_worker.data(), "stopPolling",
-                                  Qt::BlockingQueuedConnection);
-        QMetaObject::invokeMethod(m_worker.data(), "cleanup",
-                                  Qt::BlockingQueuedConnection);
+        if (m_panelBackend) {
+            m_panelBackend->shutdownBackend();
+        }
 
-        QMetaObject::invokeMethod(m_serialWorker.data(), "cleanup",
-                                  Qt::BlockingQueuedConnection);
-
-        m_workerThread->quit();
-        m_workerThread->wait();
+        emit requestSerialCleanup();
 
         m_serialThread->quit();
         m_serialThread->wait();
@@ -260,16 +276,16 @@ void ApplicationController::setupCleanup() {
 }
 
 void ApplicationController::sendRawI2CCommand(const int command, const QVariantList &data) const {
-    QMetaObject::invokeMethod(m_worker.data(), "sendRawCommand",
-                              Qt::QueuedConnection,
-                              Q_ARG(uint8_t, static_cast<uint8_t>(command)),
-                              Q_ARG(QVariantList, data));
+    if (!m_panelBackend) {
+        return;
+    }
+    m_panelBackend->sendRawPanelCommand(static_cast<uint8_t>(command), data);
 }
 
-void ApplicationController::handleRawCommandResponse(const uint8_t command, const bool success, const QByteArray &response) {
-    // Convert QByteArray to QVariantList for QML
+void ApplicationController::handleRawCommandResponse(const uint8_t command, const bool success,
+                                                     const QByteArray &response) {
     QVariantList responseList;
-    for (const char i : response) {
+    for (const char i: response) {
         responseList.append(static_cast<uint8_t>(i));
     }
     emit i2cCommandResponse(command, success, responseList);
@@ -280,7 +296,7 @@ void ApplicationController::loadBalance() const {
     DebugLogger::instance().critical(SlotMachine::balanceFilePath());
 
     if (!file.exists()) {
-        m_slotMachine->setBalance(100);  // Start with 100 units
+        m_slotMachine->setBalance(100);
         m_slotMachine->saveBalance();
         DebugLogger::instance().info(QString("No balance file found. Starting with 100 units"));
         return;
@@ -304,100 +320,122 @@ void ApplicationController::loadBalance() const {
     }
 }
 
-void ApplicationController::handleButtonPress(uint8_t buttonId) {
+void ApplicationController::handleButtonPress(uint8_t buttonId) const {
     if (!m_powered_on) {
-        return;  // Ignore button presses when powered off
+        return;
     }
 
     DebugLogger::instance().info(QString("Button %1 pressed").arg(buttonId));
 
     if (m_slotMachine->riskModeActive()) {
-        // Risk mode active
         if (buttonId == 0) {
-            // Button 0: Risk Higher (if not animating)
             if (!m_slotMachine->riskAnimating()) {
                 m_slotMachine->riskHigher();
                 DebugLogger::instance().info("Risk Higher triggered by button 0");
             }
         } else if (buttonId == 1) {
-            // Button 1: Collect Prize (if not animating)
             if (!m_slotMachine->riskAnimating()) {
                 m_slotMachine->collectRiskPrize();
                 DebugLogger::instance().info("Collect Prize triggered by button 1");
             }
         }
-    } else {
-        // Normal slot machine mode
+    } else if (m_slotMachine->priceAccepted()) {
         if (buttonId == 0) {
-            // Button 0: Spin
+            m_slotMachine->startRiskMode();
+            DebugLogger::instance().info("Start Risk Mode triggered by button 0");
+        } else if (buttonId == 1) {
+            m_slotMachine->payoutAccepted();
+            DebugLogger::instance().info("Payout accepted prize triggered by button 1");
+        }
+    } else {
+        if (buttonId == 0) {
             if (m_slotMachine->canSpin()) {
                 m_slotMachine->spin();
                 DebugLogger::instance().info("Spin triggered by button 0");
             }
         } else if (buttonId == 1) {
-            // Button 1: Cashout
             if (m_slotMachine->currentPrize() > 0) {
-                m_slotMachine->cashout();
+                m_slotMachine->acceptPrize();
                 DebugLogger::instance().info("Cashout triggered by button 1");
             }
         }
     }
 
-    // Update button states after action
     QTimer::singleShot(100, this, [this]() {
         updateButtonStates();
     });
 }
 
+void ApplicationController::sendButtonHighlightIfChanged(const uint8_t buttonId, const bool state) const {
+    if (!m_panelBackend || buttonId >= m_lastButtonStates.size()) {
+        return;
+    }
+    if (m_lastButtonStates[buttonId].has_value() && m_lastButtonStates[buttonId].value() == state) {
+        return;
+    }
+    m_lastButtonStates[buttonId] = state;
+    m_panelBackend->setButtonHighlight(buttonId, state);
+}
+
+void ApplicationController::sendTowerLevelIfChanged(const uint8_t towerId, const uint8_t row) const {
+    if (!m_panelBackend || towerId >= m_lastTowerLevels.size()) {
+        return;
+    }
+    if (m_lastTowerLevels[towerId].has_value() && m_lastTowerLevels[towerId].value() == row) {
+        return;
+    }
+    m_lastTowerLevels[towerId] = row;
+    m_panelBackend->setTowerLevel(towerId, row);
+}
+
+void ApplicationController::sendBalanceIfChanged(const double balance) const {
+    if (!m_panelBackend) {
+        return;
+    }
+    const int64_t cents = qRound64(balance * 100.0);
+    if (m_lastDisplayedBalanceCents.has_value() && m_lastDisplayedBalanceCents.value() == cents) {
+        return;
+    }
+    m_lastDisplayedBalanceCents = cents;
+    m_panelBackend->setDisplayedBalance(balance);
+}
+
+void ApplicationController::invalidateHardwareStateCache() const {
+    for (auto &state : m_lastButtonStates) {
+        state.reset();
+    }
+    for (auto &level : m_lastTowerLevels) {
+        level.reset();
+    }
+    m_lastDisplayedBalanceCents.reset();
+}
+
 void ApplicationController::updateButtonStates() const {
     if (!m_powered_on) {
-        // Power off - disable all buttons
-        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(uint8_t, 0),
-                                  Q_ARG(bool, false));
-        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(uint8_t, 1),
-                                  Q_ARG(bool, false));
+        sendButtonHighlightIfChanged(0, false);
+        sendButtonHighlightIfChanged(1, false);
         return;
     }
 
     if (m_slotMachine->riskModeActive()) {
-        // Risk mode - update button highlights
         const bool canRisk = !m_slotMachine->riskAnimating() && m_slotMachine->riskLevel() < 7;
         const bool canCollect = !m_slotMachine->riskAnimating();
 
-        // Button 0: Risk Higher (orange/active when can risk)
-        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(uint8_t, 0),
-                                  Q_ARG(bool, canRisk));
-
-        // Button 1: Collect Prize (green/active when can collect)
-        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(uint8_t, 1),
-                                  Q_ARG(bool, canCollect));
+        sendButtonHighlightIfChanged(0, canRisk);
+        sendButtonHighlightIfChanged(1, canCollect);
 
         DebugLogger::instance().verbose(QString("Risk mode buttons updated: Risk=%1, Collect=%2")
             .arg(canRisk).arg(canCollect));
+    } else if (m_slotMachine->priceAccepted()) {
+        sendButtonHighlightIfChanged(0, true);
+        sendButtonHighlightIfChanged(1, true);
     } else {
-        // Slot machine mode - update button highlights
         const bool canSpin = m_slotMachine->canSpin() && !m_slotMachine->isSpinning();
-        const bool canCashout = m_slotMachine->currentPrize() > 0 && !m_slotMachine->isSpinning() && m_slotMachine->canSpin();
+        const bool canCashout = m_slotMachine->currentPrize() > 0 && !m_slotMachine->isSpinning() && m_slotMachine->
+                                canSpin();
 
-        // Button 0: Spin (active when can spin)
-        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(uint8_t, 0),
-                                  Q_ARG(bool, canSpin));
-
-        // Button 1: Cashout (active when has prize)
-        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(uint8_t, 1),
-                                  Q_ARG(bool, canCashout));
+        sendButtonHighlightIfChanged(0, canSpin);
+        sendButtonHighlightIfChanged(1, canCashout);
 
         DebugLogger::instance().verbose(QString("Slot mode buttons updated: Spin=%1, Cashout=%2")
             .arg(canSpin).arg(canCashout));
@@ -416,52 +454,27 @@ void ApplicationController::setPowerOn(bool on) {
     emit poweredOnChanged();
 }
 
-void ApplicationController::applyPowerState() {
+void ApplicationController::applyPowerState() const {
     if (m_powered_on) {
-        // Power ON
         DebugLogger::instance().info("Applying POWER ON state");
 
-        // Turn off all tower LEDs first
         for (int t = 0; t < 3; t++) {
-            QMetaObject::invokeMethod(m_worker.data(), "highlightTower",
-                                      Qt::QueuedConnection,
-                                      Q_ARG(uint8_t, t),
-                                      Q_ARG(uint8_t, 0));
+            sendTowerLevelIfChanged(static_cast<uint8_t>(t), 0);
         }
 
-        // Update button states based on current game state
         updateButtonStates();
-
-        // Update balance on display
-        QMetaObject::invokeMethod(m_worker.data(), "updateUserBalance",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(double, m_slotMachine->balance()));
+        sendBalanceIfChanged(m_slotMachine->balance());
     } else {
-        // Power OFF
         DebugLogger::instance().info("Applying POWER OFF state");
 
-        // Turn off all buttons
-        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(uint8_t, 0),
-                                  Q_ARG(bool, false));
-        QMetaObject::invokeMethod(m_worker.data(), "highlightButton",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(uint8_t, 1),
-                                  Q_ARG(bool, false));
+        sendButtonHighlightIfChanged(0, false);
+        sendButtonHighlightIfChanged(1, false);
 
-        // Turn off all tower LEDs
         for (int t = 0; t < 3; t++) {
-            QMetaObject::invokeMethod(m_worker.data(), "highlightTower",
-                                      Qt::QueuedConnection,
-                                      Q_ARG(uint8_t, t),
-                                      Q_ARG(uint8_t, 0));
+            sendTowerLevelIfChanged(static_cast<uint8_t>(t), 0);
         }
 
-        // Clear display (set balance to 0 or send blank)
-        QMetaObject::invokeMethod(m_worker.data(), "updateUserBalance",
-                                  Qt::QueuedConnection,
-                                  Q_ARG(double, 0.0));
+        sendBalanceIfChanged(0.0);
     }
 }
 
@@ -490,18 +503,10 @@ void ApplicationController::handleSerialCommand(SerialWorker::Command cmd, const
             if (params.contains("probabilities")) {
                 const QVariantMap probMap = params["probabilities"].toMap();
                 DebugLogger::instance().info(QString("Serial: SET_PROBABILITIES command received"));
-
-                // Find the reel in QML and update probabilities
-                if (m_engine && !m_engine->rootObjects().isEmpty()) {
-                    const QObject *root = m_engine->rootObjects().first();
-                    QObject *reel = root->findChild<QObject*>("mainReel");
-                    if (reel) {
-                        QMetaObject::invokeMethod(reel, "set_probabilities",
-                                                  Q_ARG(QVariantMap, probMap));
-                        DebugLogger::instance().info("Probabilities updated on reel");
-                    } else {
-                        DebugLogger::instance().warning("Could not find reel object");
-                    }
+                if (m_slotMachine->applyReelProbabilities(probMap)) {
+                    DebugLogger::instance().info("Probabilities updated on reel");
+                } else {
+                    DebugLogger::instance().warning("Could not update reel probabilities");
                 }
             }
             break;
@@ -517,29 +522,26 @@ void ApplicationController::handleSerialCommand(SerialWorker::Command cmd, const
     }
 }
 
-void ApplicationController::sendSerialStatus() const {
+void ApplicationController::sendSerialStatus() {
     const QString status = QString(
-        "=== AllesSpitze Status ===\n"
-        "Power: %1\n"
-        "Balance: %2\n"
-        "Bet: %3\n"
-        "Current Prize: %4\n"
-        "Session Active: %5\n"
-        "Risk Mode: %6\n"
-        "Risk Level: %7\n"
-        "Risk Prize: %8\n"
-        "==========================\n"
-    ).arg(m_powered_on ? "ON" : "OFF")
-     .arg(m_slotMachine->balance())
-     .arg(m_slotMachine->bet())
-     .arg(m_slotMachine->currentPrize())
-     .arg(m_slotMachine->sessionActive() ? "YES" : "NO")
-     .arg(m_slotMachine->riskModeActive() ? "YES" : "NO")
-     .arg(m_slotMachine->riskLevel())
-     .arg(m_slotMachine->riskPrize());
+                "=== AllesSpitze Status ===\n"
+                "Power: %1\n"
+                "Balance: %2\n"
+                "Bet: %3\n"
+                "Current Prize: %4\n"
+                "Session Active: %5\n"
+                "Risk Mode: %6\n"
+                "Risk Level: %7\n"
+                "Risk Prize: %8\n"
+                "==========================\n"
+            ).arg(m_powered_on ? "ON" : "OFF")
+            .arg(m_slotMachine->balance())
+            .arg(m_slotMachine->bet())
+            .arg(m_slotMachine->currentPrize())
+            .arg(m_slotMachine->sessionActive() ? "YES" : "NO")
+            .arg(m_slotMachine->riskModeActive() ? "YES" : "NO")
+            .arg(m_slotMachine->riskLevel())
+            .arg(m_slotMachine->riskPrize());
 
-    // Send via serial worker - use a direct call with the captured status
-    QMetaObject::invokeMethod(m_serialWorker.data(), "sendResponse",
-                              Qt::QueuedConnection,
-                              Q_ARG(QString, status));
+    emit requestSerialSendResponse(status);
 }

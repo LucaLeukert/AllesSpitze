@@ -5,9 +5,13 @@
 #include <QQmlApplicationEngine>
 #include <QTimer>
 #include <QVariantList>
-#include "I2CWorker.h"
+#include <cstdint>
+#include <optional>
+#include <array>
 #include "SlotMachine.h"
 #include "SerialWorker.h"
+#include "AudioEngine.h"
+class HardwarePanelBackend;
 
 class ApplicationController : public QObject {
     Q_OBJECT
@@ -28,11 +32,15 @@ public:
     // Power control
     Q_INVOKABLE void setPowerOn(bool on);
     [[nodiscard]] bool poweredOn() const { return m_powered_on; }
+    [[nodiscard]] AudioEngine *audioEngine() const { return m_audioEngine.data(); }
 
 signals:
     // Signal to forward response to QML
     void i2cCommandResponse(int command, bool success, const QVariantList &response);
     void poweredOnChanged();
+    void requestSerialOpenPort(const QString &portName = QString());
+    void requestSerialCleanup();
+    void requestSerialSendResponse(const QString &response);
 
 private:
     void setupQmlEngine() const;
@@ -56,25 +64,43 @@ private:
     void handleRawCommandResponse(uint8_t command, bool success, const QByteArray &response);
 
     // Button handling
-    void handleButtonPress(uint8_t buttonId);
+    void handleButtonPress(uint8_t buttonId) const;
     void updateButtonStates() const;
 
     // Serial command handling
     void handleSerialCommand(SerialWorker::Command cmd, const QVariantMap &params);
-    void sendSerialStatus() const;
+    void sendSerialStatus();
 
     // Power state management
-    void applyPowerState();
+    void applyPowerState() const;
+    void beginPanelStartupSequence();
+    void beginPanelRecoverySequence();
+    void onPanelReady();
+    void invalidateHardwareStateCache() const;
+    void sendButtonHighlightIfChanged(uint8_t buttonId, bool state) const;
+    void sendTowerLevelIfChanged(uint8_t towerId, uint8_t row) const;
+    void sendBalanceIfChanged(double balance) const;
 
 private:
+    enum class ControllerState {
+        Starting,
+        Ready,
+        Recovering,
+        ShuttingDown
+    };
+
     QScopedPointer<QQmlApplicationEngine> m_engine;
-    QScopedPointer<QThread> m_workerThread;
-    QScopedPointer<I2CWorker> m_worker;
+    QScopedPointer<HardwarePanelBackend> m_panelBackend;
     QScopedPointer<QThread> m_serialThread;
     QScopedPointer<SerialWorker> m_serialWorker;
     QScopedPointer<SlotMachine> m_slotMachine;
+    QScopedPointer<AudioEngine> m_audioEngine;
     QScopedPointer<QTimer> m_healthcheckTimer;
+    mutable std::array<std::optional<bool>, 2> m_lastButtonStates{};
+    mutable std::array<std::optional<uint8_t>, 3> m_lastTowerLevels{};
+    mutable std::optional<int64_t> m_lastDisplayedBalanceCents;
     int m_consecutiveFailures{0};
     bool m_powered_on{true};
+    ControllerState m_state{ControllerState::Starting};
     static constexpr int MAX_CONSECUTIVE_FAILURES = 3;
 };

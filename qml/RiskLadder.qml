@@ -14,37 +14,44 @@ Item {
     property int animationPosition: 0
     property bool debugControls: false
     property int idleAnimationPosition: -1
-    readonly property bool ausspielungLoopActive: animating && !ausspielungStarted && currentLevel === 5 && animationPosition > 5
+    readonly property bool ausspielungLoopActive: animating && !ausspielungStarted && currentLevel === 6 && animationPosition > 6
 
     signal riskHigher()
     signal collectPrize()
     signal collectOneToOnePrize()
 
     readonly property var ladderRows: [
+        { level: 13, isCheckpoint: false },
+        { level: 12, isCheckpoint: false },
+        { level: 11, isCheckpoint: false },
         { level: 10, isCheckpoint: false },
         { level: 9, isCheckpoint: false },
         { level: 8, isCheckpoint: false },
         { level: 7, isCheckpoint: false },
-        { level: 6, isCheckpoint: false },
-        { level: 5, isCheckpoint: true },
+        { level: 6, isCheckpoint: true },
+        { level: 5, isCheckpoint: false },
         { level: 4, isCheckpoint: false },
         { level: 3, isCheckpoint: false },
         { level: 2, isCheckpoint: false },
         { level: 1, isCheckpoint: false },
-        { level: -1, isCheckpoint: false }
+        { level: 0, isCheckpoint: false }
     ]
 
     readonly property var levelMultipliers: ({
+        "0": 0.0,
         "1": 1.5,
-        "2": 2.0,
-        "3": 3.0,
-        "4": 4.0,
-        "5": 6.0,
-        "6": 8.0,
-        "7": 12.0,
-        "8": 16.0,
-        "9": 24.0,
-        "10": 40.0
+        "2": 3.0,
+        "3": 6.0,
+        "4": 12.0,
+        "5": 24.0,
+        "6": 40.0,
+        "7": 80.0,
+        "8": 120.0,
+        "9": 200.0,
+        "10": 320.0,
+        "11": 520.0,
+        "12": 840.0,
+        "13": 1400.0
     })
 
     function scrollToLevel(level) {
@@ -63,13 +70,13 @@ Item {
     }
 
     function idleLoseLevel() {
-        if (currentLevel > 5) return currentLevel - 1
-        if (currentLevel === 5 && ausspielungStarted) return 4
-        return -1
+        if (currentLevel > 6) return currentLevel - 1
+        if (currentLevel === 6 && ausspielungStarted) return 5
+        return 0
     }
 
     function idleWinLevel() {
-        return Math.min(currentLevel + 1, 10)
+        return Math.min(currentLevel + 1, 13)
     }
 
     onCurrentLevelChanged: scrollToLevel(currentLevel)
@@ -87,7 +94,7 @@ Item {
     }
 
     function ladderLevelToRow(level) {
-        if (level === 0) level = 1
+        if (level < 0) level = 0
         for (var i = 0; i < ladderRows.length; ++i) {
             if (ladderRows[i].level === level) return i
         }
@@ -96,9 +103,9 @@ Item {
 
     function rowHighlighted(row) {
         var rowLevel = ladderRows[row].level
-        if (animating) return rowLevel === animationPosition
+        if (animating) return animationPosition < 0 ? rowLevel === 0 : rowLevel === animationPosition
         if (idleBlinkTimer.running) return rowLevel === idleAnimationPosition
-        if (currentLevel < 0) return rowLevel === -1
+        if (currentLevel < 0) return rowLevel === 0
         return rowLevel === currentLevel
     }
 
@@ -106,7 +113,7 @@ Item {
         if (level < 0) return 0
         var mult = levelMultipliers[level.toString()]
         if (mult === undefined) return 0
-        return basePrize * mult
+        return mult
     }
 
     function formatPayout(value) {
@@ -114,7 +121,6 @@ Item {
     }
 
     function rowLabel(modelData) {
-        if (modelData.level === -1) return formatPayout(0)
         if (modelData.isCheckpoint) return "AUSSPIELUNG\n" + formatPayout(payoutForLevel(modelData.level))
         return formatPayout(payoutForLevel(modelData.level))
     }

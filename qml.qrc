@@ -13,5 +13,42 @@
         <file>images/background_texture.png</file>
         <file>images/riskladder_idle.png</file>
         <file>images/riskladder_highlight.png</file>
+        <file>sounds/AllesSpitzeIntro.mp3</file>
+        <file>sounds/ASPI_GewLeiter_HiVal1.mp3</file>
+        <file>sounds/ASPI_GewLeiter_HiVal2.mp3</file>
+        <file>sounds/ASPI_GewLeiter_HiVal3.mp3</file>
+        <file>sounds/ASPI_GewLeiter_HiVal4.mp3</file>
+        <file>sounds/ASPI_GewLeiter_HiVal5.mp3</file>
+        <file>sounds/ASPI_GewLeiter_LowVal1.mp3</file>
+        <file>sounds/ASPI_GewLeiter_LowVal2.mp3</file>
+        <file>sounds/ASPI_GewLeiter_LowVal3.mp3</file>
+        <file>sounds/ASPI_GewLeiter_LowVal4.mp3</file>
+        <file>sounds/ASPI_GewLeiter_LowVal5.mp3</file>
+        <file>sounds/ASPI_GewLeiter_MidVaL1.mp3</file>
+        <file>sounds/ASPI_GewLeiter_MidVaL2.mp3</file>
+        <file>sounds/ASPI_GewLeiter_MidVaL3.mp3</file>
+        <file>sounds/ASPI_GewLeiter_MidVaL4.mp3</file>
+        <file>sounds/ASPI_GewLeiter_MidVaL5.mp3</file>
+        <file>sounds/ASPI_GewLeiterNegativ.mp3</file>
+        <file>sounds/ASPI_GewinnTop1.mp3</file>
+        <file>sounds/ASPI_WLauf6s_01.mp3</file>
+        <file>sounds/ASPI_WLauf6s_02.mp3</file>
+        <file>sounds/ASPI_WLauf6s_03.mp3</file>
+        <file>sounds/Maxbet_Button.mp3</file>
+        <file>sounds/SFX_Autoplay_Off.mp3</file>
+        <file>sounds/SFX_Autoplay_On.mp3</file>
+        <file>sounds/SFX_ChooseGambleBgLoop.mp3</file>
+        <file>sounds/SFX_GambleBgLoop.mp3</file>
+        <file>sounds/SFX_GambleCollect.mp3</file>
+        <file>sounds/SFX_GambleLoose.mp3</file>
+        <file>sounds/SFX_GamblePlayoff.mp3</file>
+        <file>sounds/SFX_LadderDown.mp3</file>
+        <file>sounds/SFX_LadderUp.mp3</file>
+        <file>sounds/SFX_ReelStop.mp3</file>
+        <file>sounds/SFX_Collect.mp3</file>
+        <file>sounds/SFX_BlinkDown1.mp3</file>
+        <file>sounds/SFX_BlinkDown2.mp3</file>
+        <file>sounds/SFX_BlinkUp1.mp3</file>
+        <file>sounds/SFX_BlinkUp2.mp3</file>
     </qresource>
 </RCC>

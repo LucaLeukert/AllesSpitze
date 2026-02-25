@@ -4,12 +4,13 @@
 #include <QVector>
 #include <QPointer>
 #include <QVariantList>
+#include <QVariantMap>
 #include <QTimer>
 #include <random>
 #include "Tower.h"
 #include "SlotReel.h"
 #include "Symbol.h"
-#include "I2CWorker.h"
+#include "AudioEngine.h"
 
 class SlotMachine : public QObject {
     Q_OBJECT
@@ -39,7 +40,7 @@ public:
     ~SlotMachine() override = default;
 
     [[nodiscard]] QVariantList towers() const;
-    [[nodiscard]] bool canSpin() const { return m_can_spin && m_balance >= m_bet && !m_risk_mode_active; }
+    [[nodiscard]] bool canSpin() const { return m_can_spin && m_balance >= m_bet && !m_risk_mode_active && !m_price_accepted; }
     [[nodiscard]] QString lastResult() const { return m_last_result; }
     [[nodiscard]] double balance() const { return m_balance; }
     [[nodiscard]] double bet() const { return m_bet; }
@@ -52,6 +53,7 @@ public:
 
     // Risk ladder getters
     [[nodiscard]] bool riskModeActive() const { return m_risk_mode_active; }
+    [[nodiscard]] bool priceAccepted() const { return m_price_accepted; }
     [[nodiscard]] double riskPrize() const { return m_risk_prize; }
     [[nodiscard]] int riskLevel() const { return m_risk_level; }
     [[nodiscard]] QVariantList riskLadderSteps() const;
@@ -78,13 +80,14 @@ public:
     Q_INVOKABLE void riskHigher();      // Try to go higher on ladder
     Q_INVOKABLE void collectRiskPrize(); // Take current risk prize
     Q_INVOKABLE void collectRiskOneToOnePrize(); // Debug: take entry prize (1:1)
+    Q_INVOKABLE bool applyReelProbabilities(const QVariantMap &probabilities);
 
     void setBalance(double balance);
-    void setI2CWorker(I2CWorker *worker) { m_i2c_worker = worker; }
+    void setAudioEngine(AudioEngine *audioEngine) { m_audio_engine = audioEngine; }
 
     // Balance persistence - accessible for ApplicationController
     static QString balanceFilePath();
-    void saveBalance();
+    void saveBalance() const;
 
 signals:
     void towersChanged();
@@ -110,6 +113,7 @@ signals:
     void riskWon(double newPrize);
     void riskLost();
     void riskCollected(double amount);
+    void towerLevelChangedForHardware(int towerId, int level);
 
 private slots:
     void onSpinFinished();
@@ -117,9 +121,11 @@ private slots:
 
 private:
     void processResult(Symbol::Type symbolType, bool isMiss);
-    void updatePhysicalTower(int towerId);
+    void emitTowerLevelForHardware(int towerId);
     void updatePrize();
     void updateSessionState();
+    void applyDynamicRtpOdds();
+    void recordPayout(double amount);
     void finishRiskAttempt(bool won);
 
     // Prize multiplier tables [tower][level] - level 0 means no prize
@@ -127,14 +133,14 @@ private:
     inline static constexpr double KLEEBLATT_MULTIPLIERS[6] = {0, 3, 8, 16, 29, 50};
     inline static constexpr double COIN_MULTIPLIERS[6] = {0, 10, 40, 100, 200, 350};
 
-    // Risk ladder levels (0 = 1:1 entry), checkpoint in the middle ("Ausspielung")
-    inline static constexpr int RISK_LADDER_STEPS = 11;
-    inline static constexpr int RISK_CHECKPOINT_LEVEL = 5;
-    inline static constexpr double RISK_MULTIPLIERS[RISK_LADDER_STEPS] = {1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 40.0};
+    // Risk ladder steps as bet-based absolute payout multipliers.
+    inline static constexpr int RISK_LADDER_STEPS = 14;
+    inline static constexpr int RISK_CHECKPOINT_LEVEL = 6;
+    inline static constexpr double RISK_MULTIPLIERS[RISK_LADDER_STEPS] = {0.0, 1.5, 3.0, 6.0, 12.0, 24.0, 40.0, 80.0, 120.0, 200.0, 320.0, 520.0, 840.0, 1400.0};
 
     QVector<Tower*> m_towers;
     QPointer<SlotReel> m_reel;
-    QPointer<I2CWorker> m_i2c_worker;
+    QPointer<AudioEngine> m_audio_engine;
     bool m_can_spin = true;
     bool m_session_active = false;
     QString m_last_result;
@@ -144,9 +150,10 @@ private:
 
     // Risk ladder state
     bool m_risk_mode_active = false;
+    bool m_price_accepted = false;
     double m_risk_prize = 0.0;        // Current prize in risk mode
     double m_risk_base_prize = 0.0;   // Original prize before risk
-    int m_risk_level = 0;             // Current step on ladder (0-7)
+    int m_risk_level = 0;             // Current step on ladder
     bool m_risk_animating = false;
     int m_risk_animation_position = 0;
     int m_risk_target_position = 0;
@@ -159,8 +166,12 @@ private:
     bool m_ausspielung_started = false;
     QTimer *m_risk_animation_timer = nullptr;
     std::mt19937 m_rng;
+    int m_spins_since_last_clear = 0;
+    double m_total_bets = 0.0;
+    double m_total_payouts = 0.0;
 
     inline static constexpr double MIN_BET = 0.10;
     inline static constexpr double MAX_BET = 100.0;
     inline static constexpr double BET_STEP = 0.10;
+    inline static constexpr double TARGET_RTP = 0.95;
 };

@@ -29,9 +29,9 @@ endif ()
 # -----------------------------------------------------------------------------
 # SerialPort is only needed on Linux (Raspberry Pi)
 if (UNIX AND NOT APPLE)
-    find_package(Qt6 REQUIRED COMPONENTS Core Quick SerialPort)
+    find_package(Qt6 REQUIRED COMPONENTS Core Quick SerialPort Multimedia Test)
 else()
-    find_package(Qt6 REQUIRED COMPONENTS Core Quick)
+    find_package(Qt6 REQUIRED COMPONENTS Core Quick Multimedia Test)
 endif()
 
 qt_policy(SET QTP0001 NEW)
@@ -41,6 +41,12 @@ qt_add_executable(AllesSpitzeQt
         SlotReel.h SlotReel.cpp
         Symbol.h Symbol.cpp
         I2CWorker.h I2CWorker.cpp
+        HardwarePanelBackend.h
+        I2CHardwarePanelBackend.h I2CHardwarePanelBackend.cpp
+        StubSimulatedHardwarePanelBackend.h StubSimulatedHardwarePanelBackend.cpp
+        HardwarePanelBackendFactory.h HardwarePanelBackendFactory.cpp
+        IPanelTransport.h
+        LinuxI2CTransport.h LinuxI2CTransport.cpp
         SerialWorker.h SerialWorker.cpp
         DebugLogger.h DebugLogger.cpp
         qml.qrc
@@ -50,6 +56,8 @@ qt_add_executable(AllesSpitzeQt
         SlotMachine.h
         ApplicationController.cpp
         ApplicationController.h
+        AudioEngine.cpp
+        AudioEngine.h
 )
 
 qt_add_qml_module(AllesSpitzeQt
@@ -68,10 +76,36 @@ qt_add_qml_module(AllesSpitzeQt
 # Link libraries - conditionally link SerialPort only on Linux
 if (UNIX AND NOT APPLE)
     target_link_libraries(AllesSpitzeQt
-            PRIVATE Qt6::Core Qt6::Quick Qt6::Qml Qt6::SerialPort
+            PRIVATE Qt6::Core Qt6::Quick Qt6::Qml Qt6::SerialPort Qt6::Multimedia
     )
 else()
     target_link_libraries(AllesSpitzeQt
-            PRIVATE Qt6::Core Qt6::Quick Qt6::Qml
+            PRIVATE Qt6::Core Qt6::Quick Qt6::Qml Qt6::Multimedia
     )
+endif()
+
+include(CTest)
+
+if (BUILD_TESTING)
+    qt_add_executable(AllesSpitzeQtTests
+            tests/test_slotmachine_backend.cpp
+            SlotMachine.cpp SlotMachine.h
+            SlotReel.cpp SlotReel.h
+            Symbol.cpp Symbol.h
+            Tower.cpp Tower.h
+            DebugLogger.cpp DebugLogger.h
+            AudioEngine.cpp AudioEngine.h
+            I2CWorker.cpp I2CWorker.h
+            HardwarePanelBackend.h
+            I2CHardwarePanelBackend.cpp I2CHardwarePanelBackend.h
+            StubSimulatedHardwarePanelBackend.cpp StubSimulatedHardwarePanelBackend.h
+            HardwarePanelBackendFactory.cpp HardwarePanelBackendFactory.h
+    )
+
+    target_link_libraries(AllesSpitzeQtTests
+            PRIVATE Qt6::Core Qt6::Quick Qt6::Qml Qt6::Multimedia Qt6::Test
+    )
+    target_include_directories(AllesSpitzeQtTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+    add_test(NAME AllesSpitzeQtTests COMMAND AllesSpitzeQtTests)
 endif()
